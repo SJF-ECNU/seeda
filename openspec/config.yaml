@@ -1,0 +1,7 @@
+schema: spec-driven
+context: |
+  seeda is a local TypeScript coding agent for recursive self-improvement.
+  Five responsibilities: TUI, agent core, model/tools, versions/growth, supervisor/runtime.
+  Current stage implements core and native DeepSeek HTTP/SSE plus Bash; TUI follows.
+  No Agent or model SDK. Session-only built-in memory; Project Memory is an optional Skill.
+  Prefer small modules and real execution evidence; do not add speculative frameworks.

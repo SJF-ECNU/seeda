@@ -1,0 +1,21 @@
+.DS_Store
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+
+node_modules/
+.seeda/
+.env
+.env.local
+
+# Local credentials and development artifacts
+.env.*
+!.env.example
+*.pem
+*.key
+*.log
+coverage/
+
+# Keep illustration drafts local; publish only the selected images
+docs/assets/*
+!docs/assets/seeda-overview.png
+!docs/assets/seeda-architecture.png

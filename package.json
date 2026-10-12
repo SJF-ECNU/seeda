@@ -1,0 +1,39 @@
+{
+  "name": "seeda",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.14"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "start": "node --use-env-proxy --experimental-strip-types src/cli.ts",
+    "smoke:live": "node --use-env-proxy --experimental-strip-types scripts/live-smoke.ts",
+    "manage": "node --experimental-strip-types src/runtime/cli.ts",
+    "start:managed": "npm start",
+    "start:direct": "SEEDA_MANAGED=0 node --use-env-proxy --experimental-strip-types src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "marked": "18.1.1",
+    "string-width": "8.3.0"
+  },
+  "bin": {
+    "seeda": "src/cli.ts"
+  },
+  "license": "MIT",
+  "description": "A minimal local coding agent with project-local evolution, Git-backed versions and recoverable runtime.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SJF-ECNU/seeda.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SJF-ECNU/seeda/issues"
+  },
+  "homepage": "https://github.com/SJF-ECNU/seeda"
+}
