@@ -5,7 +5,12 @@ import { TuiState } from './state.ts';
 import { commandKey } from './commands.ts';
 import { layout, paint, graphemes, safeText, type Layout } from './render.ts';
 
-export function editInput(state: TuiState, text: string, key: Key): void {
+// A pasted block may contain newlines. Without bracketed paste those newlines are
+// indistinguishable from Enter presses, so a multi-line paste would be submitted
+// line by line instead of landing in the draft. `paste` carries that flag.
+const LINE_BREAK_KEYS = new Set(['return', 'enter', 'linefeed']);
+const isLineBreak = (key: Key): boolean => LINE_BREAK_KEYS.has(key.name ?? '') || key.sequence === '\r' || key.sequence === '\n';
+export function editInput(state: TuiState, text: string, key: Key, paste = false): void {
   state.commandDismissed = undefined;
   if (key.name === 'left') state.cursor = Math.max(0, state.cursor - 1);
   else if (key.name === 'right') state.cursor = Math.min(state.draft.length, state.cursor + 1);
@@ -14,8 +19,13 @@ export function editInput(state: TuiState, text: string, key: Key): void {
   else if (key.name === 'backspace' && state.cursor > 0) state.draft.splice(--state.cursor, 1);
   else if (key.name === 'delete') state.draft.splice(state.cursor, 1);
   else if (key.ctrl && key.name === 'u') { state.draft = []; state.cursor = 0; }
+  else if (paste && isLineBreak(key)) {
+    // A pasted CR or LF becomes a literal line break in the draft; CRLF collapses
+    // to a single break so Windows line endings do not double up.
+    if (state.draft[state.cursor - 1] !== '\n') { state.draft.splice(state.cursor, 0, '\n'); state.cursor++; }
+  }
   else if (!key.ctrl && !key.meta && text && !key.sequence?.startsWith('\x1b')) {
-    const characters = graphemes(safeText(text).replace(/\n/g, ' '));
+    const characters = graphemes(paste ? safeText(text).replace(/\r\n?/g, '\n') : safeText(text).replace(/[\r\n]/g, ' '));
     state.draft.splice(state.cursor, 0, ...characters); state.cursor += characters.length;
   }
 }
@@ -32,6 +42,7 @@ export function runTerminal(state: TuiState, options: TerminalOptions = {}): { d
   let closed = false;
   let previous: Layout | undefined;
   let dimensions = '';
+  let pasting = false;
   let complete!: () => void;
   const done = new Promise<void>(resolve => { complete = resolve; });
   const wasRaw = input.isRaw;
@@ -64,24 +75,32 @@ export function runTerminal(state: TuiState, options: TerminalOptions = {}): { d
     process.removeListener('exit', close);
     input.setRawMode(wasRaw ?? false);
     input.pause();
-    output.write('\x1b[?25h\x1b[?1049l');
+    output.write('\x1b[?25h\x1b[?2004l\x1b[?1049l');
     complete();
   };
   const onInterrupt = () => { if (state.busy) state.cancel(); else close(); };
   const onEnd = () => { state.cancel(); close(); };
   const onKey = (text: string, key: Key) => {
+    if (key.name === 'paste-start') { pasting = true; return; }
+    if (key.name === 'paste-end') { pasting = false; return; }
     if (key.ctrl && key.name === 'c') { onInterrupt(); return; }
     if (key.ctrl && key.name === 'd') { onEnd(); return; }
-    const command = commandKey(state, key);
-    if (command === 'exit') { close(); return; }
-    if (command === 'handled') { refresh(); return; }
-    if (command === 'submit' || key.name === 'return' || key.name === 'enter') {
-      if (!state.busy && state.draft.join('').trim() === '/exit') close();
-      else void state.submit();
-    } else if (key.ctrl && key.name === 'o') state.showToolDetails = !state.showToolDetails;
-    else if (key.name === 'pageup') state.scroll += Math.max(1, (output.rows || 24) - 5);
-    else if (key.name === 'pagedown') state.scroll = Math.max(0, state.scroll - Math.max(1, (output.rows || 24) - 5));
-    else editInput(state, text, key);
+    // While pasting, key presses are content: never trigger the command menu or
+    // submit, so newlines stay in the draft instead of sending partial text.
+    if (!pasting) {
+      const command = commandKey(state, key);
+      if (command === 'exit') { close(); return; }
+      if (command === 'handled') { refresh(); return; }
+      if (command === 'submit' || key.name === 'return' || key.name === 'enter') {
+        if (!state.busy && state.draft.join('').trim() === '/exit') close();
+        else void state.submit();
+        refresh(); return;
+      }
+      if (key.ctrl && key.name === 'o') { state.showToolDetails = !state.showToolDetails; refresh(); return; }
+      if (key.name === 'pageup') { state.scroll += Math.max(1, (output.rows || 24) - 5); refresh(); return; }
+      if (key.name === 'pagedown') { state.scroll = Math.max(0, state.scroll - Math.max(1, (output.rows || 24) - 5)); refresh(); return; }
+    }
+    editInput(state, text, key, pasting);
     refresh();
   };
   emitKeypressEvents(input);
@@ -89,6 +108,8 @@ export function runTerminal(state: TuiState, options: TerminalOptions = {}): { d
   input.on('keypress', onKey); input.on('end', onEnd);
   output.on('resize', refresh); output.on('error', onEnd);
   process.on('SIGTERM', onEnd); process.on('SIGINT', onInterrupt); process.on('exit', close);
-  output.write('\x1b[?1049h'); refresh();
+  // Enable bracketed paste so the terminal marks pasted text and its embedded
+  // newlines can be told apart from Enter.
+  output.write('\x1b[?2004h\x1b[?1049h'); refresh();
   return { done, refresh };
 }

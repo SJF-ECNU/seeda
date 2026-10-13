@@ -54,7 +54,9 @@ export function layout(state: TuiState, columns: number, rows: number, title: st
   const end = history.length - scroll;
   const visible = history.slice(Math.max(0, end - height), end);
   while (visible.length < height) visible.push('');
-  const draft = state.draft.map(character => safeText(character).replace(/\n/g, ' '));
+  // A pasted draft may contain real newlines; show them as a visible marker while
+  // keeping the single-line input layout and the submitted text intact.
+  const draft = state.draft.map(character => character === '\n' ? '\u23ce' : safeText(character).replace(/[\r\n]/g, ' '));
   let start = state.cursor;
   let size = 0;
   const inputWidth = Math.max(1, width - 4);

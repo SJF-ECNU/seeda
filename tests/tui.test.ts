@@ -136,3 +136,34 @@ test('session history replacement discards old display while preserving an unsen
   assert.equal(state.entries.length, 1); assert.equal(state.entries[0].text, 'new session');
   assert.equal(state.draft.join(''), '未发'); assert.equal(state.cursor, 1); assert.equal(state.scroll, 0); assert.equal(state.sessionId, 'main');
 });
+
+test('pasting multi-line text keeps newlines in the draft instead of submitting', () => {
+  const view = new TuiState([], () => {});
+  // CR inside a paste becomes one line break, not a submit.
+  editInput(view, '', { name: 'return', sequence: '\r' } as any, true);
+  editInput(view, 'hello', {} as any, true);
+  editInput(view, '', { name: 'linefeed', sequence: '\n' } as any, true);
+  editInput(view, 'world', {} as any, true);
+  assert.equal(view.draft.join(''), '\nhello\nworld');
+  assert.equal(view.busy, false);
+  // Escapes inside a paste are stripped like any other input.
+  const clean = new TuiState([], () => {});
+  editInput(clean, 'a\x1b[2Jb', {} as any, true);
+  assert.equal(clean.draft.join(''), 'ab');
+  // A CRLF pair collapses to a single line break.
+  const crlf = new TuiState([], () => {});
+  editInput(crlf, '', { name: 'return', sequence: '\r' } as any, true);
+  editInput(crlf, '', { name: 'linefeed', sequence: '\n' } as any, true);
+  assert.equal(crlf.draft.join(''), '\n');
+});
+
+test('outside a paste stray newlines fold to spaces and the draft shows a break marker', () => {
+  const view = new TuiState([], () => {});
+  editInput(view, 'one\ntwo', {} as any, false);
+  assert.equal(view.draft.join(''), 'one two');
+  const pasted = new TuiState([], () => {});
+  pasted.draft = graphemes('a\nb'); pasted.cursor = pasted.draft.length;
+  const display = layout(pasted, 40, 10, 'flash');
+  assert.ok(display.lines.some(line => line.includes('\u23ce')));
+  assert.ok(display.lines.every(line => !line.includes('\n')));
+});
