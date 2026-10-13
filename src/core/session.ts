@@ -2,18 +2,21 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Message, ToolCall } from './types.ts';
+import { RuntimeHistory, failureReason, type RuntimeObservation } from './runtime-records.ts';
 
 type RecordEntry =
   | { type: 'message'; message: Message }
   | { type: 'tool_started'; callId: string }
-  | { type: 'end'; status: string; error?: string }
+  | { type: 'end'; status: string; error?: string; endedAt?: string; reason?: string; recordingComplete?: boolean }
   | { type: 'compact'; messages: Message[] }
   | { type: 'metadata'; cwd: string; createdAt: string }
-  | { type: 'request'; id: string; implementationVersion: string };
+  | { type: 'request'; id: string; implementationVersion: string; startedAt?: string; recordingComplete?: boolean }
+  | { type: 'runtime'; observation: RuntimeObservation };
 
 export class Session {
   readonly path: string;
   readonly messages: Message[] = [];
+  readonly runtime = new RuntimeHistory();
   private context: Message[] = [];
   private readonly started = new Set<string>();
   private constructor(path: string) { this.path = path; }
@@ -36,10 +39,14 @@ export class Session {
     }
     for (const line of data.split('\n').filter(Boolean)) {
       const entry: RecordEntry = JSON.parse(line);
+      if ((entry.type === 'request' || entry.type === 'end') && entry.recordingComplete === false) session.runtime.recordingComplete = false;
       if (entry.type === 'metadata' && entry.cwd !== cwd) throw new Error('Session belongs to a different working directory');
       if (entry.type === 'message') { session.messages.push(entry.message); session.context.push(entry.message); }
       else if (entry.type === 'compact') session.context = entry.messages;
       else if (entry.type === 'tool_started') session.started.add(entry.callId);
+      else if (entry.type === 'request') session.runtime.request(entry.id, entry.implementationVersion, entry.startedAt);
+      else if (entry.type === 'runtime') session.runtime.observe(entry.observation);
+      else if (entry.type === 'end') session.runtime.end(entry.status, entry.reason ?? (entry.error ? failureReason(new Error(entry.error)) : undefined), entry.endedAt);
     }
     const resolved = new Set(session.messages.filter(m => m.role === 'tool').map(m => m.tool_call_id));
     const pending: ToolCall[] = session.messages.flatMap(m => m.tool_calls ?? []).filter(call => !resolved.has(call.id));
@@ -55,7 +62,9 @@ export class Session {
     await appendFile(this.path, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   }
   async beginRequest(): Promise<void> {
-    await this.record({ type: 'request', id: randomUUID(), implementationVersion: process.env.SEEDA_VERSION ?? '0.1.0' });
+    const id = randomUUID(), implementationVersion = process.env.SEEDA_VERSION ?? '0.1.0', startedAt = new Date().toISOString();
+    await this.record({ type: 'request', id, implementationVersion, startedAt, recordingComplete: this.runtime.recordingComplete });
+    this.runtime.request(id, implementationVersion, startedAt, true);
   }
   async add(message: Message): Promise<void> {
     await this.record({ type: 'message', message });
@@ -65,7 +74,18 @@ export class Session {
     await this.record({ type: 'tool_started', callId }); this.started.add(callId);
   }
   async end(status: string, error?: string): Promise<void> {
-    await this.record({ type: 'end', status, ...(error ? { error } : {}) });
+    const endedAt = new Date().toISOString(), reason = status === 'cancelled' ? 'cancelled' : error ? failureReason(new Error(error)) : undefined;
+    await this.record({ type: 'end', status, endedAt, reason, recordingComplete: this.runtime.recordingComplete, ...(error ? { error } : {}) });
+    this.runtime.end(status, reason, endedAt);
+  }
+  async observe(observation: RuntimeObservation): Promise<void> {
+    const usage = observation.usage ? Object.fromEntries(['promptTokens', 'completionTokens', 'totalTokens', 'promptCacheHitTokens', 'promptCacheMissTokens'].map(key => {
+      const value = observation.usage![key as keyof typeof observation.usage];
+      return [key, typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0];
+    })) as unknown as typeof observation.usage : undefined;
+    const safe = { ...observation, usage };
+    try { await this.record({ type: 'runtime', observation: safe }); this.runtime.observe(safe); }
+    catch { this.runtime.recordingComplete = false; }
   }
   getContext(): Message[] { return structuredClone(this.context); }
   async compact(messages: Message[]): Promise<void> {

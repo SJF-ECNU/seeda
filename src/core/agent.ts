@@ -1,5 +1,6 @@
 import type { AgentEvent, Model, Tool, ToolCall } from './types.ts';
 import { Session } from './session.ts';
+import { RuntimeRecordsTool } from '../tools/runtime-records.ts';
 import { compactContext, contextSize, ContextTokens, estimateContextTokens, projectInstructions } from './context.ts';
 
 export interface AgentOptions {
@@ -19,19 +20,39 @@ export class Agent {
   private get contextLimit(): number { return this.options.maxContextTokens ?? 1_000_000; }
   private get inputBudget(): number { return this.options.maxContextChars ?? Math.max(1, this.contextLimit - (this.options.model.maxOutputTokens ?? 4096)); }
   private get compactThreshold(): number { return Math.min(this.inputBudget, Math.floor((this.options.maxContextChars ?? this.contextLimit) * 0.85)); }
-  constructor(options: AgentOptions) { this.options = options; this.tokens = new ContextTokens(options.tools.map(tool => tool.definition)); }
+  constructor(options: AgentOptions) {
+    const tools = [...options.tools, new RuntimeRecordsTool(options.session, options.tools.map(tool => tool.definition.function.name))];
+    const original = options.model;
+    const model: Model = { maxOutputTokens: original.maxOutputTokens, async complete(...args) {
+      const started = performance.now();
+      try {
+        const response = await original.complete(...args);
+        await options.session.observe({ kind: 'model', durationMs: performance.now() - started,
+          status: ['stop', 'tool_calls'].includes(response.finishReason) ? 'completed' : 'failed',
+          finishReason: ['stop', 'tool_calls', 'length', 'content_filter'].includes(response.finishReason) ? response.finishReason : 'other', usage: response.usage });
+        return response;
+      } catch (error) {
+        await options.session.observe({ kind: 'model', durationMs: performance.now() - started, status: args[2].aborted ? 'cancelled' : 'failed' });
+        throw error;
+      }
+    } };
+    this.options = { ...options, tools, model }; this.tokens = new ContextTokens(tools.map(tool => tool.definition));
+  }
   cancel(): void { this.controller?.abort(); }
   async compact(): Promise<string> {
     if (this.controller) throw new Error('An agent request is already running');
     const controller = new AbortController(); this.controller = controller;
     const emit = (event: AgentEvent) => { try { this.options.onEvent?.(event); } catch {} };
     try {
+      await this.options.session.beginRequest();
       const changed = await compactContext(this.options.session, this.options.model,
         await projectInstructions(this.options.cwd), this.inputBudget, controller.signal, true, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens);
       if (changed) { this.tokens.reset(); emit({ type: 'compacted' }); }
+      await this.options.session.end('completed');
       emit({ type: 'end', status: 'completed' });
       return changed ? '上下文已压缩，原始对话记录已保留。' : '当前没有可压缩的早期对话。';
     } catch (error) {
+      await this.options.session.end(controller.signal.aborted ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Compaction failed');
       emit({ type: 'end', status: controller.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Compaction failed' });
       throw error;
     } finally { this.controller = undefined; }
@@ -48,7 +69,8 @@ export class Agent {
       if (!input.trim()) throw new Error('User input cannot be empty');
       await session.beginRequest();
       await session.add({ role: 'user', content: input });
-      const system = await projectInstructions(cwd);
+      const previous = session.runtime.recent(2).at(-2);
+      const system = await projectInstructions(cwd) + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '');
       while (true) {
         controller.signal.throwIfAborted();
         if (await compactContext(session, model, system, this.inputBudget, controller.signal, false, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens, this.compactThreshold)) { this.tokens.reset(); emit({ type: 'compacted' }); }
@@ -78,7 +100,14 @@ export class Agent {
             continue;
           }
           emit({ type: 'tool_start', call });
+          const started = performance.now();
           const result = await this.execute(call, controller.signal);
+          const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+          const failed = record.status === 'failed' || record.status === 'unknown' || (typeof record.exit_code === 'number' && record.exit_code !== 0);
+          await session.observe({ kind: 'tool', tool: tools.some(tool => tool.definition.function.name === call.function.name) ? call.function.name : 'unknown',
+            durationMs: performance.now() - started, status: controller.signal.aborted || record.status === 'cancelled' ? 'cancelled' : record.status === 'timed_out' ? 'timed_out' : failed ? 'failed' : 'completed',
+            ...(typeof record.exit_code === 'number' || record.exit_code === null ? { exitCode: record.exit_code } : {}),
+            ...(typeof record.truncated === 'boolean' ? { truncated: record.truncated } : {}) });
           await session.add({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
           emit({ type: 'tool_end', call, result });
         }

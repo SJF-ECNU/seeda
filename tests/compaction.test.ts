@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent } from '../src/core/agent.ts';
 import { Session } from '../src/core/session.ts';
-import { compactContext, estimateContextTokens } from '../src/core/context.ts';
+import { compactContext, estimateContextTokens, projectInstructions } from '../src/core/context.ts';
+import { RuntimeRecordsTool } from '../src/tools/runtime-records.ts';
 import type { Message, Model } from '../src/core/types.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
@@ -22,8 +23,11 @@ function scriptedModel(onSummary?: (messages: Message[]) => void): Model {
 }
 
 test('Agent triggers at 85 percent before full capacity and stays idle below it', async t => {
-  for (const [length, expected] of [[3800, 0], [4700, 1]]) {
+  for (const [targetTokens, expected] of [[1600, 0], [1800, 1]]) {
     const { cwd, session } = await fixture(t); let summaries = 0; const events: string[] = [];
+    const system = await projectInstructions(cwd), definitions = [new RuntimeRecordsTool(session, []).definition];
+    const base = estimateContextTokens(system, [{ role: 'user', content: '' }, { role: 'assistant', content: 'old result' }, { role: 'user', content: 'continue' }], definitions);
+    const length = Math.max(0, (targetTokens - base) * 3);
     await session.add({ role: 'user', content: 'x'.repeat(length) });
     await session.add({ role: 'assistant', content: 'old result' });
     const agent = new Agent({ cwd, session, artifactDir: cwd, tools: [], maxContextTokens: 2000,
