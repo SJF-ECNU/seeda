@@ -1,6 +1,6 @@
 import type { AgentEvent, Model, Tool, ToolCall } from './types.ts';
 import { Session } from './session.ts';
-import { compactContext, contextSize, ContextTokens, projectInstructions } from './context.ts';
+import { compactContext, contextSize, ContextTokens, estimateContextTokens, projectInstructions } from './context.ts';
 
 export interface AgentOptions {
   cwd: string;
@@ -18,6 +18,7 @@ export class Agent {
   private readonly tokens: ContextTokens;
   private get contextLimit(): number { return this.options.maxContextTokens ?? 1_000_000; }
   private get inputBudget(): number { return this.options.maxContextChars ?? Math.max(1, this.contextLimit - (this.options.model.maxOutputTokens ?? 4096)); }
+  private get compactThreshold(): number { return Math.min(this.inputBudget, Math.floor((this.options.maxContextChars ?? this.contextLimit) * 0.85)); }
   constructor(options: AgentOptions) { this.options = options; this.tokens = new ContextTokens(options.tools.map(tool => tool.definition)); }
   cancel(): void { this.controller?.abort(); }
   async compact(): Promise<string> {
@@ -26,7 +27,7 @@ export class Agent {
     const emit = (event: AgentEvent) => { try { this.options.onEvent?.(event); } catch {} };
     try {
       const changed = await compactContext(this.options.session, this.options.model,
-        await projectInstructions(this.options.cwd), this.inputBudget, controller.signal, true, this.options.maxContextChars ? undefined : this.tokens.estimate);
+        await projectInstructions(this.options.cwd), this.inputBudget, controller.signal, true, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens);
       if (changed) { this.tokens.reset(); emit({ type: 'compacted' }); }
       emit({ type: 'end', status: 'completed' });
       return changed ? '上下文已压缩，原始对话记录已保留。' : '当前没有可压缩的早期对话。';
@@ -50,7 +51,7 @@ export class Agent {
       const system = await projectInstructions(cwd);
       while (true) {
         controller.signal.throwIfAborted();
-        if (await compactContext(session, model, system, this.inputBudget, controller.signal, false, this.options.maxContextChars ? undefined : this.tokens.estimate)) { this.tokens.reset(); emit({ type: 'compacted' }); }
+        if (await compactContext(session, model, system, this.inputBudget, controller.signal, false, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens, this.compactThreshold)) { this.tokens.reset(); emit({ type: 'compacted' }); }
         const response = await model.complete([{ role: 'system', content: system }, ...session.getContext()],
           tools.map(tool => tool.definition), controller.signal, text => emit({ type: 'text', text }));
         controller.signal.throwIfAborted();

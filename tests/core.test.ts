@@ -117,12 +117,13 @@ test('compaction keeps complete tool pairs, persists the summary, preserves orig
   const w = await workspace(t);
   await w.session.add({ role: 'user', content: 'old goal '+ 'x'.repeat(3000) });
   await w.session.add({ role: 'assistant', content: 'old answer' });
+  await w.session.add({ role: 'user', content: 'continue old goal' });
   await w.session.add(call('recent', 'pwd'));
   await w.session.add({ role: 'tool', content: 'result', tool_call_id: 'recent' });
   const groups = messageGroups(w.session.getContext());
   assert.equal(groups.at(-1)!.length, 2);
-  assert.equal(await compactContext(w.session, scripted([{ role: 'assistant', content: 'Goal and progress' }]), 'system', 1200, new AbortController().signal), true);
-  assert.equal(w.session.messages.length, 4);
+  assert.equal(await compactContext(w.session, scripted(Array.from({ length: 10 }, () => ({ role: 'assistant' as const, content: 'Goal and progress' }))), 'system', 1200, new AbortController().signal), true);
+  assert.equal(w.session.messages.length, 5);
   assert.equal(w.session.getContext()[0].role, 'system');
   const loaded = await Session.open(w.session.path, w.cwd);
   const context = loaded.getContext();
@@ -135,6 +136,7 @@ test('failed compaction keeps the original context', async t => {
   const w = await workspace(t);
   await w.session.add({ role: 'user', content: 'x'.repeat(2000) });
   await w.session.add({ role: 'assistant', content: 'recent' });
+  await w.session.add({ role: 'user', content: 'continue' });
   const before = w.session.getContext();
   const model: Model = { async complete() { throw new Error('summary failed'); } };
   await assert.rejects(compactContext(w.session, model, '', 1000, new AbortController().signal), /summary failed/);
