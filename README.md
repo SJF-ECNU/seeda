@@ -122,6 +122,10 @@ seeda publish coding-plus-v2 VERSION_ID --intro intro.json
 
 项目状态在 `.seeda/runtime/`，全局库默认在 `~/.local/share/seeda/strains-library`。`SEEDA_LIBRARY` 可指定全局库，`SEEDA_HOME` 可覆盖运行根；覆盖根只能服务一个项目。发布实现不复制会话、运行数据库或凭据。重复播种拒绝覆盖已有项目。详见[种系选择与发布](docs/种系选择与发布.md)和[Agent 嫁接流程](docs/Agent嫁接流程.md)。
 
+## 失败与重试
+
+暂时性模型请求失败最多尝试3次，带退避；单次超时可重试，取消/鉴权错误不重试。已流出正文后不自动重放。Bash失败保留退出码和输出，不盲目重复有副作用的命令，也不会因清理异常退出整个会话。详见 [1.0.1 更新对比](docs/1.0.1更新对比.md)。
+
 ## 开发与文档
 
 ```bash
