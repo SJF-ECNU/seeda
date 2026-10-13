@@ -1,6 +1,6 @@
 import type { AgentEvent, Model, Tool, ToolCall } from './types.ts';
 import { Session } from './session.ts';
-import { compactContext, projectInstructions } from './context.ts';
+import { compactContext, ContextTokens, projectInstructions } from './context.ts';
 
 export interface AgentOptions {
   cwd: string;
@@ -9,12 +9,16 @@ export interface AgentOptions {
   session: Session;
   tools: Tool[];
   maxContextChars?: number;
+  maxContextTokens?: number;
   onEvent?: (event: AgentEvent) => void;
 }
 export class Agent {
   private readonly options: AgentOptions;
   private controller?: AbortController;
-  constructor(options: AgentOptions) { this.options = options; }
+  private readonly tokens: ContextTokens;
+  private get contextLimit(): number { return this.options.maxContextTokens ?? 1_000_000; }
+  private get inputBudget(): number { return this.options.maxContextChars ?? Math.max(1, this.contextLimit - (this.options.model.maxOutputTokens ?? 4096)); }
+  constructor(options: AgentOptions) { this.options = options; this.tokens = new ContextTokens(options.tools.map(tool => tool.definition)); }
   cancel(): void { this.controller?.abort(); }
   async compact(): Promise<string> {
     if (this.controller) throw new Error('An agent request is already running');
@@ -22,8 +26,8 @@ export class Agent {
     const emit = (event: AgentEvent) => { try { this.options.onEvent?.(event); } catch {} };
     try {
       const changed = await compactContext(this.options.session, this.options.model,
-        await projectInstructions(this.options.cwd), this.options.maxContextChars ?? 128_000, controller.signal, true);
-      if (changed) emit({ type: 'compacted' });
+        await projectInstructions(this.options.cwd), this.inputBudget, controller.signal, true, this.options.maxContextChars ? undefined : this.tokens.estimate);
+      if (changed) { this.tokens.reset(); emit({ type: 'compacted' }); }
       emit({ type: 'end', status: 'completed' });
       return changed ? '上下文已压缩，原始对话记录已保留。' : '当前没有可压缩的早期对话。';
     } catch (error) {
@@ -46,10 +50,11 @@ export class Agent {
       const system = await projectInstructions(cwd);
       while (true) {
         controller.signal.throwIfAborted();
-        if (await compactContext(session, model, system, this.options.maxContextChars ?? 128_000, controller.signal)) emit({ type: 'compacted' });
+        if (await compactContext(session, model, system, this.inputBudget, controller.signal, false, this.options.maxContextChars ? undefined : this.tokens.estimate)) { this.tokens.reset(); emit({ type: 'compacted' }); }
         const response = await model.complete([{ role: 'system', content: system }, ...session.getContext()],
           tools.map(tool => tool.definition), controller.signal, text => emit({ type: 'text', text }));
         controller.signal.throwIfAborted();
+        if (response.usage) this.tokens.record(system, session.getContext(), response.usage.promptTokens);
         const calls = response.message.tool_calls ?? [];
         if ((response.finishReason !== 'stop' && response.finishReason !== 'tool_calls') ||
           (calls.length > 0 && response.finishReason !== 'tool_calls') ||

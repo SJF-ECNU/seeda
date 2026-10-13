@@ -29,7 +29,7 @@ export class Supervisor {
   constructor(store: VersionStore, cwd: string) { this.store = store; this.cwd = realpathSync(cwd); this.socketPath = join(store.root, 'control.sock'); }
   private worker(version: Version, role: string, cwd = this.cwd, session = sessionPath(this.store.root, this.sessionId()), artifacts = join(this.store.root, 'outputs')): WorkerProcess {
     // Candidates use only model connection settings, not arbitrary service credentials.
-    const env = role === 'primary' ? process.env : Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'SEEDA_THINKING', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'].includes(key)));
+    const env = role === 'primary' ? process.env : Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'SEEDA_THINKING', 'BRAVE_API_KEY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'].includes(key)));
     return new WorkerProcess(this.store, version, cwd, session, artifacts, role,
       event => { if (role === 'primary' && this.primary?.version.id === version.id) this.listener?.(event); },
       args => { if (role !== 'primary' || this.primary?.version.id !== version.id) throw new Error('Only the current primary can manage evolution'); return this.manage(args, version.id); },
@@ -155,7 +155,7 @@ export class Supervisor {
       this.store.db.prepare("INSERT INTO evaluations(id,source_version,candidate_version,status,evidence_path) VALUES(?,?,?,'running',?)").run(id, source, version, evidence);
       const events: AgentEvent[] = []; let answer = ''; let status = 'failed'; let error: string | undefined;
       this.candidate = new WorkerProcess(this.store, target, cwd, join(dir, 'session.jsonl'), join(dir, 'outputs'), 'candidate', event => events.push(event), async () => { throw new Error('Candidates cannot manage versions'); }, () => {},
-        Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'].includes(key))));
+        Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'BRAVE_API_KEY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'].includes(key))));
       let forcedStop: NodeJS.Timeout | undefined;
       const timeout = setTimeout(() => { this.candidate?.cancel(); forcedStop = setTimeout(() => { void this.candidate?.stop(); }, 2500); }, 120_000);
       try { await this.candidate.ready; answer = await this.candidate.run(task); status = 'completed'; }

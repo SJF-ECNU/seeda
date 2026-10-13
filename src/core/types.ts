@@ -14,11 +14,20 @@ export interface ToolDefinition {
   type: 'function';
   function: { name: string; description: string; parameters: Record<string, unknown> };
 }
+export interface Usage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  promptCacheHitTokens: number;
+  promptCacheMissTokens: number;
+}
 export interface ModelResponse {
   message: Message;
   finishReason: string;
+  usage?: Usage;
 }
 export interface Model {
+  readonly maxOutputTokens?: number;
   complete(messages: Message[], tools: ToolDefinition[], signal: AbortSignal,
     onText?: (text: string) => void): Promise<ModelResponse>;
 }
@@ -36,4 +45,6 @@ export type AgentEvent =
   | { type: 'tool_start'; call: ToolCall }
   | { type: 'tool_end'; call: ToolCall; result: unknown }
   | { type: 'compacted' }
+  | { type: 'usage'; usage: Usage; contextChars: number; maxContextChars: number; maxContextTokens?: number }
+  | { type: 'retrying'; attempt: number; delayMs: number; error: string }
   | { type: 'end'; status: 'completed' | 'failed' | 'cancelled'; error?: string };

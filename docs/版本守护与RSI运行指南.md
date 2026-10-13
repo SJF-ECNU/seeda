@@ -145,3 +145,7 @@ worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 
 守护监测自身执行间隔：电脑睡眠或守护长时间暂停后，重新给予 worker 一个 6 秒心跳观察窗口，避免先唤醒的守护把健康 worker 误判为失联。正常监测下持续缺失心跳仍会终止 worker 并执行既有恢复；ready 时也重置观察起点。间隔采用单调时钟。
 
 instances.reason 区分 `Worker heartbeat timed out`、`Worker startup timed out` 与外部退出的信号/退出码。旧记录只有 SIGKILL，不能单凭它确定历史终止来源。管理源码更新后需停止并重开守护，保存的 Agent 实现与会话不需覆盖。
+
+## 前端独立更新
+
+全局命令始终使用安装目录的CLI/TUI/守护；select和promote只切换Agent worker。新保存和发布的种系排除前端与外部管理代码；旧快照兼容，不从版本目录启动其CLI。安装更新可使用仓库npm link；守护管理代码变更需seeda stop后重开。前端保持同一socket连接即可观察新主实例，无需跟随Agent更新全局入口。

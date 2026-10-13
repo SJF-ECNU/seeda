@@ -30,6 +30,24 @@ export async function projectInstructions(cwd: string): Promise<string> {
     (skills.length ? `\nAvailable Skills (read instructions with Bash only when relevant):\n${skills.join('\n\n')}\n` : '');
 }
 
+// Estimates are used only before provider usage is available and for new text.
+export function estimateContextTokens(system: string, history: Message[], tools: unknown[] = []): number {
+  return Math.ceil(Buffer.byteLength(JSON.stringify({ system, history, tools }), 'utf8') / 3);
+}
+export class ContextTokens {
+  private measured?: { size: number; tokens: number };
+  private readonly tools: unknown[];
+  constructor(tools: unknown[]) { this.tools = tools; }
+  estimate = (system: string, history: Message[]): number => {
+    const size = estimateContextTokens(system, history, this.tools);
+    return this.measured && size >= this.measured.size
+      ? this.measured.tokens + size - this.measured.size : size;
+  };
+  record(system: string, history: Message[], tokens: number): void {
+    this.measured = { size: estimateContextTokens(system, history, this.tools), tokens };
+  }
+  reset(): void { this.measured = undefined; }
+}
 // A boundary can never separate an assistant's calls from their tool results.
 export function messageGroups(messages: Message[]): Message[][] {
   const groups: Message[][] = [];
@@ -43,15 +61,15 @@ export function messageGroups(messages: Message[]): Message[][] {
   return groups;
 }
 export async function compactContext(session: Session, model: Model, system: string,
-  maxChars: number, signal: AbortSignal, force = false): Promise<boolean> {
+  maxChars: number, signal: AbortSignal, force = false, measure: (system: string, history: Message[]) => number = (system, history) => system.length + JSON.stringify(history).length): Promise<boolean> {
   const history = session.getContext();
-  if (!force && system.length + JSON.stringify(history).length <= maxChars) return false;
+  if (!force && measure(system, history) <= maxChars) return false;
   const groups = messageGroups(history);
   let keep = groups.length;
   let size = 0;
   const budget = Math.floor(maxChars / 3);
   for (let i = groups.length - 1; i >= 0; i--) {
-    const next = JSON.stringify(groups[i]).length;
+    const next = measure('', groups[i]);
     if (size && size + next > budget) break;
     size += next; keep = i;
   }
@@ -70,7 +88,7 @@ export async function compactContext(session: Session, model: Model, system: str
     throw new Error('Context summary did not complete; original context is retained');
   }
   const messages: Message[] = [{ role: 'system', content: `Earlier session summary:\n${response.message.content}` }, ...tail];
-  if (system.length + JSON.stringify(messages).length > maxChars) throw new Error('Summary still exceeds context budget; original context is retained');
+  if (measure(system, messages) > maxChars) throw new Error('Summary still exceeds context budget; original context is retained');
   signal.throwIfAborted();
   await session.compact(messages);
   return true;

@@ -3,7 +3,7 @@ import { graphemes, safeText, wrap } from './text.ts';
 export { graphemes, safeText, wrap } from './text.ts';
 import { markdown, styledLines, tint } from './markdown.ts';
 import { commandMatches } from './commands.ts';
-import type { TuiState } from './state.ts';
+import { cacheHitRate, contextRatio, formatTokens, type TuiState } from './state.ts';
 
 export interface Layout { lines: string[]; cursorRow: number; cursorColumn: number; }
 export function layout(state: TuiState, columns: number, rows: number, title: string, color = process.env.NO_COLOR === undefined): Layout {
@@ -67,9 +67,28 @@ export function layout(state: TuiState, columns: number, rows: number, title: st
   const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'][state.pulse % 8];
   const statusNames: Record<string, string> = { Ready: '就绪', Thinking: '正在思考', 'Running tool': '正在执行', Cancelling: '正在取消', Cancelled: '已取消', Failed: '请求失败' };
   const statusTone = state.status === 'Failed' ? '31' : state.busy ? '36' : '32';
+  const metrics = state.metrics;
+  // Keep plain text for layout: fit() strips ANSI, so colors must be applied
+  // *after* fitting, otherwise nested tints are dropped and widths overcount.
+  const segments: { text: string; tone: string }[] = [];
+  if (metrics) {
+    const percent = Math.round(contextRatio(metrics) * 100);
+    // Warn before compaction rather than after the request fails.
+    const contextTone = percent >= 90 ? '31' : percent >= 70 ? '33' : '90';
+    segments.push({ text: `上下文 ${formatTokens(metrics.maxContextTokens ? metrics.promptTokens : metrics.contextChars)}/${formatTokens(metrics.maxContextTokens ?? metrics.maxContextChars)} ${metrics.maxContextTokens ? "tokens" : "字符"} ${percent}%`, tone: contextTone });
+    const rate = cacheHitRate(metrics);
+    if (rate !== undefined) segments.push({ text: `缓存命中 ${Math.round(rate * 100)}%`, tone: '90' });
+  }
+  const plainTail = ` ${state.busy ? spinner : '●'} ${state.busy && state.status === 'Ready' ? '正在收尾' : statusNames[state.status] ?? state.status}${segments.length ? ` · ${segments.map(segment => segment.text).join(' · ')}` : ''}${scroll ? ' · 浏览历史' : ''}${state.showToolDetails ? ' · 工具详情' : ''}`;
+  const fittedTail = fit(plainTail);
+  // Tint each surviving plain segment in place, restoring the status tone after
+  // each reset so the surrounding text keeps its colour on the same line.
+  const tintedTail = color && segments.length
+    ? segments.reduce((line, segment) => line.replace(segment.text, `\x1b[${segment.tone}m${segment.text}\x1b[0m\x1b[${statusTone}m`), fittedTail)
+    : fittedTail;
   const lines = [tint('seeda', '1;36', color) + tint(fit(`  /  ${title}${state.sessionId ? `  · 会话 ${state.sessionId === 'main' ? 'main' : state.sessionId.slice(0, 8)}` : ''}`, Math.max(1, width - 5)), '90', color),
     tint('─'.repeat(width), '90', color), ...visible, ...preview,
-    tint(fit(` ${state.busy ? spinner : '●'} ${state.busy && state.status === 'Ready' ? '正在收尾' : statusNames[state.status] ?? state.status}${scroll ? ' · 浏览历史' : ''}${state.showToolDetails ? ' · 工具详情' : ''}`), statusTone, color),
+    tint(tintedTail, statusTone, color),
     tint(' › ', '1;36', color) + (shown || tint(fit('输入消息…', inputWidth), '90', color)),
     tint(fit(matches.length ? ` ↑↓ 选择 ${selected + 1}/${matches.length} · Tab 补全 · Enter 确认 · Esc 收起` : ' Enter 发送 · Ctrl+C 取消/退出 · Ctrl+O 工具详情 · PgUp/PgDn 历史'), '90', color)];
   return { lines, cursorRow: Math.max(1, rows - 1), cursorColumn: Math.min(columns, size + 4) };

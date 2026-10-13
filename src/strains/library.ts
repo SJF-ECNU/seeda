@@ -2,12 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { chmod, cp, mkdir, rm } from 'node:fs/promises';
+import { chmod, mkdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { VersionStore, Version } from '../versions/store.ts';
 
 const exec = promisify(execFile);
-const files = ['src', 'tests', 'scripts', '.agents', 'AGENTS.md', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json'];
+import { agentOnly, copyAgent, snapshotFiles } from '../versions/snapshot.ts';
 export interface Introduction { summary: string; improvements: string; scenarios: string; limitations: string; validation: string; }
 export function introduction(value: unknown): Introduction {
   if (!value || typeof value !== 'object' || !['summary', 'improvements', 'scenarios', 'limitations', 'validation'].every(key => typeof (value as Record<string, unknown>)[key] === 'string' && String((value as Record<string, unknown>)[key]).trim())) throw new Error('Introduction requires summary, improvements, scenarios, limitations and validation text');
@@ -66,8 +66,9 @@ export class StrainLibrary {
       const existing = this.db.prepare("SELECT id FROM strains WHERE name='origin'").get();
       if (existing) { const strain = this.get(String(existing.id)); this.db.exec('COMMIT'); return strain; }
       await this.repository();
-      for (const file of files) { await rm(join(this.repo, file), { recursive: true, force: true }); await cp(join(source, file), join(this.repo, file), { recursive: true }); }
-      await this.git('add', ...files);
+      await copyAgent(source, this.repo);
+      await this.git('add', '-u');
+      await this.git('add', ...snapshotFiles);
       if (await this.git('diff', '--cached', '--name-only')) await this.git('-c', 'user.name=seeda', '-c', 'user.email=seeda@localhost', 'commit', '-m', 'Origin strain');
       const strain = await this.save('origin', await this.git('rev-parse', 'HEAD'), '通用初始种系', null, null, null);
       this.db.prepare('INSERT INTO strain_introductions(strain_id,introduction) VALUES(?,?)').run(strain.id, JSON.stringify({ summary: '通用初始种系', improvements: '提供基础编码与候选管理起点', scenarios: '本地编码任务与独立项目成长', limitations: '需要 Node.js 24.14+、Git、npm；运行模型需要已有提供商配置', validation: '系统初始实现；具体项目适配与质量需要单独验证' }));
@@ -82,10 +83,15 @@ export class StrainLibrary {
       if (this.db.prepare('SELECT id FROM strains WHERE name=?').get(name)) throw new Error('Strain name already exists');
       await this.repository();
       await this.git('fetch', store.repo, version.git_commit);
+      await this.git('checkout', '--detach', version.git_commit);
+      await agentOnly(this.repo);
+      await this.git('add', '-u');
+      await this.git('add', ...snapshotFiles);
+      if (await this.git('diff', '--cached', '--name-only')) await this.git('-c', 'user.name=seeda', '-c', 'user.email=seeda@localhost', 'commit', '-m', `Agent-only strain: ${name}`);
       const origin = store.origin();
       const ancestor = version.parent_id ? this.db.prepare('SELECT id FROM strains WHERE source_project=? AND source_version=?').get(project, version.parent_id) : undefined;
       const parent = ancestor?.id ?? (origin && this.db.prepare('SELECT id FROM strains WHERE id=?').get(origin.strain_id)?.id) ?? null;
-      const strain = await this.save(name, version.git_commit, version.reason, project, version.id, parent === null ? null : String(parent));
+      const strain = await this.save(name, await this.git('rev-parse', 'HEAD'), version.reason, project, version.id, parent === null ? null : String(parent));
       this.db.prepare('INSERT INTO strain_introductions(strain_id,introduction) VALUES(?,?)').run(strain.id, JSON.stringify(intro));
       this.db.exec('COMMIT'); return this.get(strain.id);
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }

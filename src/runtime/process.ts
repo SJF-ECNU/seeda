@@ -5,6 +5,15 @@ import type { AgentEvent, Message } from '../core/types.ts';
 import type { VersionStore, Version } from '../versions/store.ts';
 import type { ManagerMessage, WorkerMessage } from './protocol.ts';
 
+// Kill a process group only when the pid can name one. Node treats pid 0 as
+// "the current process group", so an unguarded negative pid could signal the
+// supervisor and its ancestors. ESRCH means the group is already gone.
+export function killGroup(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  try { process.kill(-pid, 'SIGKILL'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') { /* group already reaped or not ours */ } }
+}
+
 export class WorkerProcess {
   readonly child: ChildProcess;
   readonly id = randomUUID();
@@ -33,7 +42,7 @@ export class WorkerProcess {
     const deadline = setTimeout(() => terminate('Worker startup timed out'), 15_000);
     const onExit = (error: Error) => {
       if (exited) return; exited = true;
-      for (const pid of this.groups) { try { process.kill(-pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }
+      for (const pid of this.groups) killGroup(pid);
       this.groups.clear(); clearTimeout(deadline); clearInterval(this.interval);
       store.db.prepare('UPDATE instances SET state=?,reason=?,ended_at=CURRENT_TIMESTAMP WHERE id=?').run(this.stopping ? 'stopped' : 'failed', this.stopping ? null : error.message, this.id);
       if (!initialized) readyReject(error);
@@ -43,7 +52,7 @@ export class WorkerProcess {
     this.child.on('error', error => onExit(error));
     this.child.on('exit', (code, signal) => onExit(new Error(terminationReason ?? `Worker exited (${signal ?? code})`)));
     this.child.on('message', (message: WorkerMessage) => {
-      if (message.type === 'process') { if (message.started) this.groups.add(message.pid); else this.groups.delete(message.pid); }
+      if (message.type === 'process') { if (message.started) { if (Number.isInteger(message.pid) && message.pid > 1) this.groups.add(message.pid); } else this.groups.delete(message.pid); }
       else if (message.type === 'heartbeat') this.lastHeartbeat = performance.now();
       else if (message.type === 'ready') {
         initialized = true; this.lastHeartbeat = performance.now(); clearTimeout(deadline); this.messages = message.messages; this.supportsCompact = message.compact === true;

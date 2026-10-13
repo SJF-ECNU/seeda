@@ -39,6 +39,7 @@ export interface DeepSeekOptions {
   timeoutMs?: number;
 }
 export class DeepSeekModel implements Model {
+  get maxOutputTokens(): number { return this.options.maxTokens ?? 4096; }
   private readonly options: DeepSeekOptions;
   constructor(options: DeepSeekOptions) {
     if (!options.apiKey) throw new Error('DEEPSEEK_API_KEY is required');
@@ -52,6 +53,7 @@ export class DeepSeekModel implements Model {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.apiKey}` },
       body: JSON.stringify({
         model: this.options.model ?? 'deepseek-flash', messages, stream: true,
+        stream_options: { include_usage: true },
         max_tokens: this.options.maxTokens ?? 4096,
         thinking: { type: this.options.thinking ? 'enabled' : 'disabled' },
         ...(this.options.thinking ? { reasoning_effort: 'high' } : {}),
@@ -68,12 +70,14 @@ export class DeepSeekModel implements Model {
     let reasoning = '';
     let finishReason = '';
     let completed = false;
+    let usage: ModelResponse['usage'];
     const calls = new Map<number, ToolCall>();
     for await (const data of sseData(response.body)) {
       requestSignal.throwIfAborted();
       if (data === '[DONE]') { completed = true; break; }
       const item = JSON.parse(data);
       if (item.error) throw new Error('Model returned a stream error');
+      if (Number.isFinite(item.usage?.prompt_tokens)) usage = { promptTokens: item.usage.prompt_tokens, completionTokens: item.usage.completion_tokens ?? 0, totalTokens: item.usage.total_tokens ?? 0, promptCacheHitTokens: item.usage.prompt_cache_hit_tokens ?? 0, promptCacheMissTokens: item.usage.prompt_cache_miss_tokens ?? 0 };
       const choice = item.choices?.[0];
       if (!choice) continue;
       const delta = choice.delta ?? {};
@@ -95,6 +99,6 @@ export class DeepSeekModel implements Model {
     const message: Message = { role: 'assistant', content: content || null };
     if (reasoning) message.reasoning_content = reasoning;
     if (toolCalls.length) message.tool_calls = toolCalls;
-    return { message, finishReason };
+    return { message, finishReason, usage };
   }
 }
