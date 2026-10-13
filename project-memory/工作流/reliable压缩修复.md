@@ -11,7 +11,10 @@ status: completed
 ## 当前文档
 [[docs/reliable上下文压缩设计与验证]]。
 ## 近期记录
+[[project-memory/工作记录/2026/10/2026-10-14-Codex-压缩修复发布完成]]。
 [[project-memory/工作记录/2026/10/2026-10-13-Codex-压缩修复发布]]。
 [[project-memory/工作记录/2026/10/2026-10-13-Codex-reliable压缩修复]]。
+## 发布
+GitHub公开v0.1.0指向c9c85ba，附件下载比对通过，发布提交CI成功。
 ## 下一步
 新项目可选择新种系；现有实例升级需独立验证接替，模型窗口仍应匹配配置。
