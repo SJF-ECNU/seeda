@@ -14,7 +14,7 @@ export class WorkerProcess {
   busy = false;
   stopping = false;
   private groups = new Set<number>();
-  private lastHeartbeat = Date.now();
+  private lastHeartbeat = performance.now();
   private interval: NodeJS.Timeout;
   private runPending?: { resolve: (answer: string) => void; reject: (error: Error) => void };
   readonly ready: Promise<void>;
@@ -28,7 +28,9 @@ export class WorkerProcess {
     store.db.prepare("INSERT INTO instances(id,version_id,role,state,pid) VALUES(?,?,?,'starting',?)").run(this.id, version.id, role, this.child.pid ?? null);
     let readyResolve!: () => void; let readyReject!: (error: Error) => void; let initialized = false; let exited = false;
     this.ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
-    const deadline = setTimeout(() => this.child.kill('SIGKILL'), 15_000);
+    let terminationReason: string | undefined;
+    const terminate = (reason: string) => { terminationReason ??= reason; this.child.kill('SIGKILL'); };
+    const deadline = setTimeout(() => terminate('Worker startup timed out'), 15_000);
     const onExit = (error: Error) => {
       if (exited) return; exited = true;
       for (const pid of this.groups) { try { process.kill(-pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }
@@ -39,12 +41,12 @@ export class WorkerProcess {
       if (!this.stopping && initialized) failed(this, error);
     };
     this.child.on('error', error => onExit(error));
-    this.child.on('exit', (code, signal) => onExit(new Error(`Worker exited (${signal ?? code})`)));
+    this.child.on('exit', (code, signal) => onExit(new Error(terminationReason ?? `Worker exited (${signal ?? code})`)));
     this.child.on('message', (message: WorkerMessage) => {
       if (message.type === 'process') { if (message.started) this.groups.add(message.pid); else this.groups.delete(message.pid); }
-      else if (message.type === 'heartbeat') this.lastHeartbeat = Date.now();
+      else if (message.type === 'heartbeat') this.lastHeartbeat = performance.now();
       else if (message.type === 'ready') {
-        initialized = true; clearTimeout(deadline); this.messages = message.messages; this.supportsCompact = message.compact === true;
+        initialized = true; this.lastHeartbeat = performance.now(); clearTimeout(deadline); this.messages = message.messages; this.supportsCompact = message.compact === true;
         store.db.prepare("UPDATE instances SET state='ready' WHERE id=?").run(this.id); readyResolve();
       } else if (message.type === 'event') event(message.event);
       else if (message.type === 'result') {
@@ -55,8 +57,13 @@ export class WorkerProcess {
           error => this.send({ type: 'management_result', id: message.id, error: error instanceof Error ? error.message : 'Management failed' }));
       }
     });
+    let lastCheck = performance.now();
     this.interval = setInterval(() => {
-      if (!this.stopping && initialized && Date.now() - this.lastHeartbeat > 6000) this.child.kill('SIGKILL');
+      const now = performance.now();
+      // Sleep or a suspended supervisor is not evidence of a dead worker.
+      if (now - lastCheck > 6000) this.lastHeartbeat = now;
+      lastCheck = now;
+      if (!this.stopping && initialized && now - this.lastHeartbeat > 6000) terminate('Worker heartbeat timed out');
     }, 1000);
   }
   send(message: ManagerMessage): void { if (this.child.connected) this.child.send(message, () => {}); }

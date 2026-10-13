@@ -8,6 +8,8 @@ seeda 是面向递归自我改进（RSI）的本地 coding CLI。它从最小 Ag
 
 ![seeda 的种系、播种、成长、谱系与嫁接](docs/assets/seeda-overview.png)
 
+完整说明见 [seeda 项目介绍](docs/seeda项目介绍.md)。
+
 ## 快速开始
 
 需要 **Node.js 24.14+、Git、npm**。目前从源码安装，尚未发布 npm 包。

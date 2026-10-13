@@ -139,3 +139,9 @@ worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 
 嫁接流程沿用 strains、draft、submit、evaluate、evidence、decide、promote、rollback。平台没有 graft-export/graft-import 命令或专用嫁接表；Git 补丁由 Agent 的 Bash 操作生成和应用。
 
 种系选择和默认设置、标准介绍发布见 [[docs/种系选择与发布]]。既有项目保留自己的播种来源与版本选择，默认变化不会覆盖它们。
+
+## 睡眠与心跳恢复
+
+守护监测自身执行间隔：电脑睡眠或守护长时间暂停后，重新给予 worker 一个 6 秒心跳观察窗口，避免先唤醒的守护把健康 worker 误判为失联。正常监测下持续缺失心跳仍会终止 worker 并执行既有恢复；ready 时也重置观察起点。间隔采用单调时钟。
+
+instances.reason 区分 `Worker heartbeat timed out`、`Worker startup timed out` 与外部退出的信号/退出码。旧记录只有 SIGKILL，不能单凭它确定历史终止来源。管理源码更新后需停止并重开守护，保存的 Agent 实现与会话不需覆盖。
