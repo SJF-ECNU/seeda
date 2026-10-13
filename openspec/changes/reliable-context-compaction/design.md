@@ -12,3 +12,6 @@ workstream: reliable-context-compaction
 
 ## 验证
 85%前后边界、provider计量触发、多批超窗历史、单一超长工具结果、当前用户指令保留、摘要失败/取消/过大原context保留、session重载、完整回归和类型检查。真实模型测试如未执行必须注明，不称百万token已验证。
+
+## 发布接续
+用户已授权推送并发布。按仓库现有GitHub源码渠道发布首个v0.1.0 Release，附独立Agent源码包；不发布npm、不切换全局种系默认或运行实例。确认上传工件不含会话、凭据、运行数据库或node_modules，并核对远端提交和Release资产。
