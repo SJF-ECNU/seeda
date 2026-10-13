@@ -22,7 +22,8 @@ export async function projectInstructions(cwd: string): Promise<string> {
     const description = frontmatter?.match(/^description:\s*(.+)$/m)?.[1]?.trim();
     if (skillName && description) skills.push(`${skillName}: ${description}\nRead when relevant: ${path}`);
   }
-  return `You are seeda, a local coding agent. Use tools to inspect files, make requested changes and run verification.\n` +
+  return `你是 seeda，一个以当前项目为成长环境的本地 coding agent，能够完成编码任务，并通过可用工具修改自身实现、验证候选、请求接替或回退，让改进可追溯、可验证。\n` +
+    `Use tools to inspect files, make requested changes and run verification.\n` +
     `Do not claim a command ran unless its result is recorded. Unknown prior tool results require workspace inspection, not automatic replay.\n` +
     `Each Bash call is independent. Do not run background servers. Working directory: ${cwd}\n` +
     (rules ? `\nProject instructions:\n${rules}\n` : '') +
