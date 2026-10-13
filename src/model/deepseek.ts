@@ -1,5 +1,21 @@
 import { networkError } from './network.ts';
-import type { Message, Model, ModelResponse, ToolCall, ToolDefinition } from '../core/types.ts';
+import { retry, type RetryOptions } from './retry.ts';
+import type { Message, Model, ModelResponse, ToolCall, ToolDefinition, Usage } from '../core/types.ts';
+
+// Every provider reports usage differently; the cache fields are the ones the
+// status line needs, so a missing field is normalized instead of dropped.
+export function normalizeUsage(value: unknown): Usage | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const count = (key: string): number => { const raw = record[key]; return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0; };
+  const promptTokens = count('prompt_tokens');
+  const completionTokens = count('completion_tokens');
+  const totalTokens = count('total_tokens') || promptTokens + completionTokens;
+  const promptCacheHitTokens = count('prompt_cache_hit_tokens');
+  const promptCacheMissTokens = count('prompt_cache_miss_tokens');
+  if (!promptTokens && !completionTokens && !totalTokens) return undefined;
+  return { promptTokens, completionTokens, totalTokens, promptCacheHitTokens, promptCacheMissTokens };
+}
 
 // SSE framing is independent of network chunks and UTF-8 character boundaries.
 export async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
@@ -37,6 +53,7 @@ export interface DeepSeekOptions {
   thinking?: boolean;
   maxTokens?: number;
   timeoutMs?: number;
+  retry?: RetryOptions;
 }
 export class DeepSeekModel implements Model {
   get maxOutputTokens(): number { return this.options.maxTokens ?? 4096; }
@@ -47,14 +64,26 @@ export class DeepSeekModel implements Model {
   }
   async complete(messages: Message[], tools: ToolDefinition[], signal: AbortSignal,
     onText?: (text: string) => void): Promise<ModelResponse> {
+    // A transient failure retries the whole request: a fresh connection and a
+    // fresh stream. Once any text has been streamed to the caller a retry would
+    // duplicate it, so from that point the attempt is final.
+    let streamed = false;
+    const guarded = onText ? (text: string) => { streamed = true; onText(text); } : undefined;
+    return retry(() => this.attempt(messages, tools, signal, guarded), signal, {
+      attempts: 3, baseDelayMs: 500, maxDelayMs: 8000, ...this.options.retry,
+      shouldRetry: () => !streamed,
+    });
+  }
+  private async attempt(messages: Message[], tools: ToolDefinition[], signal: AbortSignal,
+    onText?: (text: string) => void): Promise<ModelResponse> {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.options.timeoutMs ?? 120_000)]);
     const response = await fetch(`${(this.options.baseUrl ?? 'https://api.deepseek.com').replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.apiKey}` },
       body: JSON.stringify({
         model: this.options.model ?? 'deepseek-flash', messages, stream: true,
-        stream_options: { include_usage: true },
         max_tokens: this.options.maxTokens ?? 4096,
+        stream_options: { include_usage: true },
         thinking: { type: this.options.thinking ? 'enabled' : 'disabled' },
         ...(this.options.thinking ? { reasoning_effort: 'high' } : {}),
         ...(tools.length ? { tools } : {}),
@@ -69,15 +98,16 @@ export class DeepSeekModel implements Model {
     let content = '';
     let reasoning = '';
     let finishReason = '';
+    let usage: Usage | undefined;
     let completed = false;
-    let usage: ModelResponse['usage'];
     const calls = new Map<number, ToolCall>();
     for await (const data of sseData(response.body)) {
       requestSignal.throwIfAborted();
       if (data === '[DONE]') { completed = true; break; }
       const item = JSON.parse(data);
       if (item.error) throw new Error('Model returned a stream error');
-      if (Number.isFinite(item.usage?.prompt_tokens)) usage = { promptTokens: item.usage.prompt_tokens, completionTokens: item.usage.completion_tokens ?? 0, totalTokens: item.usage.total_tokens ?? 0, promptCacheHitTokens: item.usage.prompt_cache_hit_tokens ?? 0, promptCacheMissTokens: item.usage.prompt_cache_miss_tokens ?? 0 };
+      // The usage frame carries no choices, so it must be read before the guard.
+      usage = normalizeUsage(item.usage) ?? usage;
       const choice = item.choices?.[0];
       if (!choice) continue;
       const delta = choice.delta ?? {};
@@ -99,6 +129,6 @@ export class DeepSeekModel implements Model {
     const message: Message = { role: 'assistant', content: content || null };
     if (reasoning) message.reasoning_content = reasoning;
     if (toolCalls.length) message.tool_calls = toolCalls;
-    return { message, finishReason, usage };
+    return { message, finishReason, ...(usage ? { usage } : {}) };
   }
 }
