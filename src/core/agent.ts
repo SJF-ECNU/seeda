@@ -1,6 +1,6 @@
 import type { AgentEvent, Model, Tool, ToolCall } from './types.ts';
 import { Session } from './session.ts';
-import { compactContext, ContextTokens, projectInstructions } from './context.ts';
+import { compactContext, contextSize, ContextTokens, projectInstructions } from './context.ts';
 
 export interface AgentOptions {
   cwd: string;
@@ -54,6 +54,7 @@ export class Agent {
         const response = await model.complete([{ role: 'system', content: system }, ...session.getContext()],
           tools.map(tool => tool.definition), controller.signal, text => emit({ type: 'text', text }));
         controller.signal.throwIfAborted();
+        if (response.usage) emit({ type: 'usage', usage: response.usage, contextChars: contextSize(system, session.getContext()), maxContextChars: this.options.maxContextChars ?? 0, maxContextTokens: this.options.maxContextChars ? undefined : this.contextLimit });
         if (response.usage) this.tokens.record(system, session.getContext(), response.usage.promptTokens);
         const calls = response.message.tool_calls ?? [];
         if ((response.finishReason !== 'stop' && response.finishReason !== 'tool_calls') ||

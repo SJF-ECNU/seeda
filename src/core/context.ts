@@ -30,6 +30,8 @@ export async function projectInstructions(cwd: string): Promise<string> {
     (skills.length ? `\nAvailable Skills (read instructions with Bash only when relevant):\n${skills.join('\n\n')}\n` : '');
 }
 
+export function contextSize(system: string, history: Message[]): number { return system.length + JSON.stringify(history).length; }
+
 // Estimates are used only before provider usage is available and for new text.
 export function estimateContextTokens(system: string, history: Message[], tools: unknown[] = []): number {
   return Math.ceil(Buffer.byteLength(JSON.stringify({ system, history, tools }), 'utf8') / 3);

@@ -23,7 +23,7 @@ const management: Tool = {
 await configureNetwork();
 const session = await Session.open(sessionPath, cwd);
 const bash = new BashTool(16_384, (pid, started) => send({ type: 'process', pid, started }));
-const agent = new Agent({ cwd, session, artifactDir, model: new DeepSeekModel({ apiKey: process.env.DEEPSEEK_API_KEY ?? '', baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL, thinking: process.env.SEEDA_THINKING === '1' }), tools: role === 'primary' ? [bash, management] : [bash], onEvent: event => send({ type: 'event', event }) });
+const agent = new Agent({ cwd, session, artifactDir, model: new DeepSeekModel({ apiKey: process.env.DEEPSEEK_API_KEY ?? '', baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL, thinking: process.env.SEEDA_THINKING === '1', retry: { onRetry: info => send({ type: 'event', event: { type: 'retrying', attempt: info.attempt, delayMs: info.delayMs, error: info.error.message } }) } }), tools: role === 'primary' ? [bash, management] : [bash], onEvent: event => send({ type: 'event', event }) });
 let active: Promise<void> | undefined;
 const heartbeat = setInterval(() => send({ type: 'heartbeat' }), 1000);
 const stop = () => {
