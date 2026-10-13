@@ -47,9 +47,14 @@ export class BashTool implements Tool {
     });
     if (child.pid) this.onProcess?.(child.pid, true);
     const kill = () => {
-      if (!child.pid) return;
+      if (!child.pid || child.pid <= 1) return;
       try { if (process.platform === 'win32') child.kill('SIGKILL'); else process.kill(-child.pid, 'SIGKILL'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+          failure = `Cannot terminate Bash process group (${(error as NodeJS.ErrnoException).code ?? 'unknown'})`;
+          try { child.kill('SIGKILL'); } catch { /* Report the cleanup failure without crashing the Agent. */ }
+        }
+      }
     };
     const onAbort = () => { cancelled = true; kill(); };
     const onData = (chunk: Buffer) => {
