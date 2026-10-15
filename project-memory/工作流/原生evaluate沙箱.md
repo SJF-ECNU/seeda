@@ -35,3 +35,7 @@ owner: Codex
 - [[openspec/changes/native-evaluation-sandbox/specs/evaluation-sandbox/spec]]
 
 - [[docs/evaluate沙箱]]
+
+## 提交与默认种系
+
+源码9118fe6已推送main，CI成功；本机全局默认seeda-agent-reliable-sandbox，新项目默认seed和实际process evaluate已验证。详见 [[project-memory/工作记录/2026/10/2026-10-15-Codex-sandbox提交推送与默认种系]]。
