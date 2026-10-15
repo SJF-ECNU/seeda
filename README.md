@@ -91,7 +91,7 @@ seeda 提供自我改进的执行和生命周期机制，实际改进由任务�
 
 选择规则：`evaluate(version, task, sandbox)` 中 `sandbox` 必须是 `process` 或 `container`；省略时默认为 `process`。**没有未沙箱回退**——后端不可用即评估失败，不会退回到直接执行。
 
-**重要限制**：`process` 后端在 macOS 下只 `allow process-exec` 而 `deny process-fork`，即候选进程本身可以启动，但它**不能创建任何子进程**——因此 Bash 工具会以 `spawn EPERM` 失败。需要 Bash、`tsc`、跑测试或 `git` 的验证**必须**选择 `container`。若一次评估需要工具调用却用了 `process`，评估 agent 将无法执行任何命令。
+**后端选择**：默认 `process` 在 macOS 下支持继承 Seatbelt 的 Bash、Node、TypeScript、测试和 Git 子进程，不要求 Docker；取消、超时及宿主退出时回收后台后代。需要独立 Linux 环境或依赖时显式选 `container`。macOS 的回收使用系统 Python 3 调用内核沙箱查询；该能力不可用时启动失败，不放宽隔离。详见 [[docs/evaluate沙箱]]。
 
 ## 会话与 TUI
 

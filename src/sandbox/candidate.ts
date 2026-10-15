@@ -1,6 +1,7 @@
-import { fork, type ChildProcess } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { fork, execFile, type ChildProcess } from 'node:child_process';
+import { realpathSync, existsSync } from 'node:fs';
+import { promisify } from 'node:util';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -17,7 +18,7 @@ export function sandboxBackend(value: unknown): SandboxBackend {
 const directory = dirname(fileURLToPath(import.meta.url));
 const bridge = join(directory, 'bridge.mjs');
 const limit = 4 * 1024 * 1024;
-interface Launch { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; cleanup?: string[]; timeoutMs: number; }
+interface Launch { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; cleanup?: string[]; macCleanup?: string[]; timeoutMs: number; }
 
 // The guardian owns backend handles and remains alive if the supervisor dies.
 class Execution {
@@ -54,20 +55,24 @@ class Execution {
 }
 
 export function macProfile(runtime: string, writable: string): string {
-  const paths = ['/System/Library', '/usr/lib', '/usr/share', '/usr/bin', '/bin', '/sbin', '/dev/null', '/dev/urandom', '/dev/random', process.execPath, runtime, bridge];
+  const npm = join(dirname(process.execPath), 'npm');
+  const tools = ['/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'];
+  if (existsSync(npm)) tools.push(dirname(dirname(realpathSync(npm))));
+  const paths = [...tools.filter(path => existsSync(path)), '/System/Library', '/usr/lib', '/usr/share', '/usr/bin', '/bin', '/sbin', '/dev/null', '/dev/urandom', '/dev/random', process.execPath, runtime, bridge];
   return `(version 1)(deny default)
-    (allow process-exec)(allow sysctl-read)(allow file-read-metadata)
+    (allow process-exec)(allow process-fork)(allow signal (target same-sandbox))(allow sysctl-read)(allow file-read-metadata)
     (allow file-read* (literal "/"))
     (allow mach-lookup (global-name "com.apple.system.logger"))
     (allow file-read* ${paths.map(path => `(subpath ${JSON.stringify(realpathSync(path))})`).join(' ')})
     (allow file-read* file-write* (subpath ${JSON.stringify(writable)}))
     (allow file-write-data (literal "/dev/null"))
     (deny file-read* (subpath ${JSON.stringify(join(runtime, '.git'))}))
-    (deny network*)(deny signal)(deny process-fork)`;
+    (deny file-read* file-write* (literal ${JSON.stringify(join(writable, '.host-only'))}))
+    (deny network*)`;
 }
 function processLaunch(runtime: string, work: string, env: NodeJS.ProcessEnv): Launch {
   const args = ['--experimental-strip-types', bridge, join(runtime, 'src/runtime/worker.ts'), join(work, 'workspace'), join(work, 'session.jsonl'), join(work, 'outputs'), 'candidate'];
-  if (process.platform === 'darwin') return { command: '/usr/bin/sandbox-exec', args: ['-p', macProfile(runtime, work), process.execPath, ...args], cwd: runtime, env, timeoutMs: 120000 };
+  if (process.platform === 'darwin') return { command: '/usr/bin/sandbox-exec', args: ['-p', macProfile(runtime, work), process.execPath, ...args], cwd: runtime, env, macCleanup: [work, join(work, '.host-only')], timeoutMs: 120000 };
   if (process.platform !== 'linux') throw new Error('Process sandbox requires macOS Seatbelt or Linux bubblewrap; select container on this host');
   const binds: string[] = [];
   for (const path of ['/usr/bin', '/usr/lib', '/usr/share', '/bin', '/sbin', '/lib', '/lib64']) binds.push('--ro-bind-try', path, path);
@@ -123,10 +128,19 @@ export class SandboxCandidate {
     for (const name of ['workspace', 'outputs', 'home', 'tmp']) await mkdir(join(this.work, name), { recursive: true, mode: 0o700 });
     if (this.stopped) throw new Error('Sandbox cancelled before startup');
     const runtime = realpathSync(this.runtime); const work = realpathSync(this.work);
-    const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'),
+    const developerBins = process.platform === 'darwin' ? ['/Library/Developer/CommandLineTools/usr/bin', '/Applications/Xcode.app/Contents/Developer/usr/bin'].filter(path => existsSync(path)) : [];
+    const env = { PATH: [join(runtime, 'node_modules/.bin'), dirname(process.execPath), ...developerBins, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'),
       DEEPSEEK_API_KEY: 'sandbox-host-broker', DEEPSEEK_BASE_URL: 'https://sandbox.invalid', DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL ?? 'deepseek-flash', SEEDA_SYSTEM_PROXY: '0', SEEDA_THINKING: process.env.SEEDA_THINKING ?? '0' };
     let launch: Launch;
-    if (this.backend === 'process') launch = processLaunch(runtime, work, env);
+    if (this.backend === 'process') {
+      if (process.platform === 'darwin') {
+        if (runtime === work || work.startsWith(runtime + '/') || runtime.startsWith(work + '/')) throw new Error('Sandbox runtime and workspace must be separate');
+        await writeFile(join(work, '.host-only'), '', { mode: 0o600 });
+        try { await promisify(execFile)('/usr/bin/python3', [join(directory, 'macos-cleanup.py'), '--check', work, join(work, '.host-only')], { timeout: 2000 }); }
+        catch { throw new Error('macOS process sandbox requires system Python 3 and Seatbelt cleanup support'); }
+      }
+      launch = processLaunch(runtime, work, process.platform === 'darwin' ? { ...env, SEEDA_SANDBOX_VERIFY: '1' } : env);
+    }
     else {
       const dependencyDir = join(dirname(work), 'dependencies');
       await mkdir(dependencyDir, { recursive: true, mode: 0o700 });

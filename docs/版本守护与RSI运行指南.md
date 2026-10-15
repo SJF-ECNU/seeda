@@ -61,7 +61,7 @@ SQLite 保存 versions、drafts、evaluations、instances、runtime_state、swit
 5. `evidence` 获取原始验证记录。A 用 `decide` 传 evaluation、accept/reject 和具体 reason；只有完成的验证能记录 accept。
 6. `promote` 传 version、evaluation 和 reason；当前 A 对该 B 的接受记录满足生命周期条件后，守护在请求边界接替。A 也可用 `rollback` 和 reason 请求质量回退。
 
-候选没有 management 工具；macOS process 后端为单进程，Bash 不可用，需要 Bash 时选择 container。候选验证历史不复制到正式用户会话。候选使用与主版本相同的模型连接配置，评价不是模型或参数差异造成的效果声明。
+候选没有 management 工具；默认 process 支持继承隔离的 Bash 和测试子进程，需要独立 Linux 环境与依赖时选择 container。候选验证历史不复制到正式用户会话。候选使用与主版本相同的模型连接配置，评价不是模型或参数差异造成的效果声明。
 
 相同操作也可通过管理 CLI 运行，用于手动检查和演练：
 

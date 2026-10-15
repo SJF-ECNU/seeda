@@ -1,13 +1,28 @@
 // Runs outside the sandbox. Only the host can configure this process over IPC.
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 let child;
 let config;
 let stopping;
 let bytes = 0;
+let verification;
+const macCleanup = args => new Promise(resolve => {
+  const helper = spawn('/usr/bin/python3', [fileURLToPath(new URL('./macos-cleanup.py', import.meta.url)), ...args], { stdio: 'ignore' });
+  helper.on('error', () => resolve(false));
+  helper.on('close', code => resolve(code === 0));
+});
 const send = message => { if (process.connected) process.send(message, () => {}); };
 async function stop() {
   if (stopping) return stopping;
   stopping = (async () => {
+    if (config?.macCleanup) {
+      const cleaned = await macCleanup(config.macCleanup);
+      if (!cleaned) {
+        if (process.connected) process.send({ type: 'failure', error: 'macOS sandbox cleanup failed' }, () => process.exit(1));
+        else process.exit(1);
+        return;
+      }
+    }
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     if (config?.cleanup) {
       const run = args => new Promise(resolve => {
@@ -47,10 +62,19 @@ process.on('message', message => {
     stream.on('data', data => {
       bytes += data.length;
       if (bytes > 16 * 1024 * 1024) { send({ type: 'failure', error: 'Sandbox output limit exceeded' }); void stop(); }
-      else send({ type: name, data: data.toString('base64') });
+      else if (config.macCleanup && name === 'stdout') {
+        verification ??= macCleanup(['--verify', String(child.pid), ...config.macCleanup]).then(valid => {
+          if (valid) child.stdin.write('{"type":"sandbox_verified"}\n');
+          return valid;
+        });
+        void verification.then(valid => {
+          if (valid) send({ type: name, data: data.toString('base64') });
+          else { send({ type: 'failure', error: 'Cannot verify macOS sandbox process ownership' }); void stop(); }
+        });
+      } else send({ type: name, data: data.toString('base64') });
     });
   }
   child.on('error', () => { send({ type: 'failure', error: 'Sandbox backend could not start; check its installation and permissions' }); void stop(); });
-  child.on('close', (code, signal) => { send({ type: 'exit', code, signal }); void stop(); });
+  child.on(config.macCleanup ? 'exit' : 'close', (code, signal) => { send({ type: 'exit', code, signal }); void stop(); });
   setTimeout(() => { send({ type: 'failure', error: 'Sandbox execution timed out' }); void stop(); }, config.timeoutMs).unref();
 });

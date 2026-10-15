@@ -12,13 +12,13 @@ npm run manage -- evaluate VERSION_ID '用固定输入验证新 prompt 的回答
 npm run manage -- evaluate VERSION_ID '在 /candidate 检查代码并运行测试' container
 ```
 
-Agent management 同样使用 `{operation: "evaluate", version: "...", task: "...", sandbox: "container"}`。需要执行 shell 的任务应主动选择容器；不根据改动行数自动分类。
+Agent management 同样使用 `{operation: "evaluate", version: "...", task: "...", sandbox: "container"}`。普通本机 shell/测试任务可用默认 process；需要独立 Linux 环境或依赖时选择容器，不根据改动行数自动分类。
 
 ## 两种选择
 
 | 后端 | 环境与用途 | 依赖与限制 |
 | --- | --- | --- |
-| process / macOS | Seatbelt，保留当前 Node 与候选依赖；适合 prompt、单进程 Node 逻辑 | 无需 Docker；禁止 fork/启动子进程、网络和对其他进程发信号；Bash 不可用 |
+| process / macOS | Seatbelt，保留当前 Node 与候选依赖；适合 prompt、Bash、Node/TypeScript 测试和 Git | 无需 Docker；需要系统 Python 3 与内核沙箱查询；子进程继承文件、网络和信号限制 |
 | process / Linux | Bubblewrap，独立 PID/网络等 namespace，显式绑定候选和系统运行文件 | 需要 bwrap 与允许创建 namespace 的宿主；缺失或被禁止时失败 |
 | container | Node 24 Debian Linux 一次性容器；适合 Bash、独立依赖和环境变更 | 需要 Docker daemon；使用 node:24-bookworm-slim；不验证 macOS 专属行为 |
 
@@ -26,15 +26,15 @@ Agent management 同样使用 `{operation: "evaluate", version: "...", task: "..
 
 ## 边界与回收
 
-实现由 seeda 自行编写，直接调用 OS/容器原语，没有引入第三方 sandbox SDK、服务平台或插件框架。宿主启动器、候选通信适配和退出回收各有一个小文件，位于 src/sandbox；这些宿主文件不进入 Agent 进化快照。候选的现有 worker IPC 接口由沙箱内适配器转换，因此无需改写已保存候选的 worker 源码。
+实现由 seeda 自行编写，直接调用 OS/容器原语，没有引入第三方 sandbox SDK、服务平台或插件框架。宿主启动器、候选通信适配、guardian 与 macOS 回收薄包装位于 src/sandbox；这些宿主文件不进入 Agent 进化快照。候选的现有 worker IPC 接口由沙箱内适配器转换，因此无需改写已保存候选的 worker 源码。
 
 候选只读自身运行目录和必要系统文件；可写独立 HOME、workspace、session、outputs 和临时目录。真实项目、state.db、控制 socket、正式会话与宿主凭据不可读写。产物位于 `evaluations/<id>/sandbox/`，最终 `result.json` 位于该可写区域之外，由宿主在停止沙箱后写入，包含实际后端和失败原因。
 
 模型推理通过标准输入输出转到宿主固定的 DeepSeek Chat Completions 地址。宿主自行加凭据，拒绝 HTTP 重定向，不接受候选指定的 URL、headers 或任意代理请求。每次 evaluate 最多 64 次模型请求，请求和响应分别最多 4 MiB；模型响应缓冲后交回候选，因此评测文本不会实时逐 token 展示。仍沿用宿主已有代理配置。
 
-候选通信总输出最多 16 MiB，未终止单行最多 8 MiB；畸形输出、管理消息与超量输出失败。候选上报的 PID 不会被当作宿主信号目标。独立 guardian 只操作自己创建的进程或容器；宿主断开、候选取消或超时都会触发回收。容器删除失败会报告失败，不把未回收的运行称为完成。
+候选通信总输出最多 16 MiB，未终止单行最多 8 MiB；畸形输出、管理消息与超量输出失败。候选上报的 PID 不会被当作宿主信号目标。macOS guardian 通过系统 Python 3 调用内核 sandbox_check 和 libproc，依据继承的权限识别后代；受保护的空文件 `.host-only` 为该评测提供额外只允许宿主读取的路径。启动前检查查询能力，实际权限验证完成后才加载候选；先冻结后终止并复查，覆盖 detached/reparented 后代，也不会选择权限不同的宿主或其他评测进程。候选无法删除该识别文件；此文件不存放凭据。缺少系统 Python 3（通常由 Command Line Tools 提供）或查询不匹配时明确失败。独立 guardian 只操作自己创建的进程或容器；宿主断开、候选取消或超时都会触发回收。容器删除失败会报告失败，不把未回收的运行称为完成。
 
-进程后端不承诺与容器等价的 CPU/内存限额；可写产物目录目前没有硬磁盘配额。普通容器也不是 VM 级隔离。候选回答、测试报告和日志仍是候选产物，质量判断继续由现有 evidence→decide→promote 流程完成。
+进程后端不承诺与容器等价的 CPU/内存/PID 限额；可写产物目录目前没有硬磁盘配额。普通容器也不是 VM 级隔离。候选回答、测试报告和日志仍是候选产物，质量判断继续由现有 evidence→decide→promote 流程完成。
 
 ## 验证与部署范围
 

@@ -40,7 +40,7 @@ git -C DRAFT_PATH apply PATCH_PATH
 
 1. 在候选中运行相应类型检查和测试，失败则继续修复。
 2. `submit(draft, reason)` 保存候选。reason 写明“嫁接源种系 ID、BASE→SOURCE commit、文件/功能范围”，版本父关系仍指向目标项目原版本。
-3. `evaluate(version, task, sandbox)` 执行沙箱内候选任务；轻量 prompt 可选 process，Bash/测试任务选 container，容器内源码位于 `/candidate`，不要使用宿主 runtime_path。验证任务应实际调用改进，不能只复述源码。详见 [[docs/evaluate沙箱]]。
+3. `evaluate(version, task, sandbox)` 执行沙箱内候选任务；普通本机 prompt/Bash/测试可选默认 process；独立 Linux 环境选 container，此时源码位于 `/candidate`，不要使用宿主 runtime_path。验证任务应实际调用改进，不能只复述源码。详见 [[docs/evaluate沙箱]]。
 4. `evidence(evaluation)` 检查执行、失败与输出。`decide` 记录 accept/reject 及理由；失败验证不能接受。
 5. 接受后 `promote(version, evaluation, reason)`，在请求边界接替。原版本保留，需要时 rollback。
 

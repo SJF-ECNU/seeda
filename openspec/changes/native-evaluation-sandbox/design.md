@@ -25,7 +25,7 @@ CLI 保留 evaluate VERSION TASK，增加可选末尾 process/container 参数�
 macOS 使用 Seatbelt；Linux 使用 Bubblewrap 并结合网络/信号/进程隔离；其他系统首版明确不支持，不能假装执行成功。
 用户进一步要求自行实现且极度简单：不引入 sandbox SDK，直接使用系统 Seatbelt/Bubblewrap 与 Docker CLI。实现只包含启动器、候选 IPC 适配和独立回收 guardian，约 300 行；不建设通用平台。文件读取采用必要路径白名单，不能只拒绝少数凭据目录。
 只暴露实际 Node、候选依赖与必要系统运行文件，独立 HOME/TMP；处理 realpath、符号链接以及 /var 与 /private/var 别名。
-macOS 进程后端禁止 process-fork、network 和 signal，限制为单进程 prompt/Node 逻辑验证；需要 Bash、服务或子进程时由模型选择 container。此取舍避免自行实现复杂的跨 session 进程追踪和后台进程回收。Linux 使用 PID namespace、只读根和显式可写目录，可运行子进程。进程后端不承诺容器等价的 CPU/内存限额；可写产物目录没有硬磁盘配额。
+macOS 初版禁止 fork 导致默认评测无法使用 Bash；已由 [[openspec/changes/macos-process-subprocess/design]] 修复为允许继承限制的子进程，并按内核权限识别回收，不依赖进程树或候选自报 PID。Linux 使用 PID namespace、只读根和显式可写目录，可运行子进程。进程后端不承诺容器等价的 CPU/内存限额；可写产物目录没有硬磁盘配额。
 
 ## 容器后端
 使用 Docker CLI 执行一次性 Node Linux 容器；非 root、去除 capabilities、no-new-privileges、只读根目录、独立临时目录、CPU/内存/PID 限制；不启用 privileged/host network，不挂载 Docker socket 或宿主 HOME。

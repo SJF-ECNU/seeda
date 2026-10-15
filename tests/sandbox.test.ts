@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { createServer as createSocketServer } from 'node:net';
 import { spawnSync, fork } from 'node:child_process';
-import { SandboxCandidate, sandboxBackend } from '../src/sandbox/candidate.ts';
+import { SandboxCandidate, sandboxBackend, macProfile } from '../src/sandbox/candidate.ts';
 
 const processSupported = process.platform === 'darwin' || process.platform === 'linux' && spawnSync('bwrap', ['--version']).status === 0;
 const dockerSupported = spawnSync('docker', ['info', '--format', '{{.OSType}}'], { timeout: 10000 }).status === 0;
@@ -19,7 +19,7 @@ async function fixture() {
   return { root, runtime, work: join(root, 'sandbox') };
 }
 const checkingWorker = `
-import {readFileSync,writeFileSync,symlinkSync} from 'node:fs';
+import {readFileSync,writeFileSync,symlinkSync,unlinkSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {Socket} from 'node:net';
 process.send({type:'ready'});
@@ -27,12 +27,14 @@ process.on('message',async m=>{
  if(m.type!=='run')return;
  const input=JSON.parse(m.input), cwd=process.argv[2];
  const results={};
- for(const op of ['read','write','symlink','signal']){
-  try{if(op==='read')readFileSync(input.secret);if(op==='write')writeFileSync(input.secret,'bad');if(op==='symlink'){symlinkSync(input.secret,cwd+'/link');readFileSync(cwd+'/link');}if(op==='signal')process.kill(input.pid,0);results[op]='ALLOWED';}catch{results[op]='blocked';}
+ for(const op of ['read','write','symlink','signal','markerRead','markerRemove']){
+  try{if(op==='markerRead')readFileSync(cwd+'/../.host-only');if(op==='markerRemove')unlinkSync(cwd+'/../.host-only');if(op==='read')readFileSync(input.secret);if(op==='write')writeFileSync(input.secret,'bad');if(op==='symlink'){symlinkSync(input.secret,cwd+'/link');readFileSync(cwd+'/link');}if(op==='signal')process.kill(input.pid,0);results[op]='ALLOWED';}catch{results[op]='blocked';}
  }
  results.key=process.env.DEEPSEEK_API_KEY;
  writeFileSync(cwd+'/ok.txt','sandbox');
  results.fork=spawnSync('/bin/sh',['-c','echo child'],{encoding:'utf8'}).status;
+ const childCode="const fs=require('fs'),out={};for(const op of ['read','write','signal']){try{if(op==='read')fs.readFileSync(process.argv[1]);if(op==='write')fs.writeFileSync(process.argv[1],'bad');if(op==='signal')process.kill(Number(process.argv[2]),0);out[op]='ALLOWED';}catch{out[op]='blocked';}}console.log(JSON.stringify(out));";
+ results.child=JSON.parse(spawnSync(process.execPath,['-e',childCode,input.secret,String(input.pid)],{encoding:'utf8'}).stdout);
  results.network=await new Promise(resolve=>{const s=new Socket();s.setTimeout(300);s.on('connect',()=>{s.destroy();resolve('ALLOWED');});s.on('error',()=>resolve('blocked'));s.on('timeout',()=>{s.destroy();resolve('blocked');});s.connect(input.port,'127.0.0.1');});
  results.socket=await new Promise(resolve=>{const s=new Socket();s.setTimeout(300);s.on('connect',()=>{s.destroy();resolve('ALLOWED');});s.on('error',()=>resolve('blocked'));s.on('timeout',()=>{s.destroy();resolve('blocked');});s.connect(input.socketPath);});
  process.send({type:'process',pid:input.pid,started:true});
@@ -54,8 +56,8 @@ for (const backend of ['process', 'container'] as const) {
   t.after(async()=>{await candidate.stop().catch(()=>{});server.closeAllConnections();server.close();socketServer.close();await rm(f.root,{recursive:true,force:true});for(const [key,value]of Object.entries(prior)){const name=key==='key'?'DEEPSEEK_API_KEY':'DEEPSEEK_BASE_URL';if(value===undefined)delete process.env[name];else process.env[name]=value;}});
   const answer=JSON.parse(await candidate.run(JSON.stringify({secret,pid:process.pid,port:address.port,socketPath})));
   assert.equal(answer.read,'blocked');assert.equal(answer.write,'blocked');assert.equal(answer.symlink,'blocked');assert.equal(answer.signal,'blocked');assert.equal(answer.network,'blocked');assert.equal(answer.socket,'blocked');
-  assert.equal(answer.key,'sandbox-host-broker');assert.equal(answer.model,'model-ok');assert.equal(calls,1);
-  assert.equal(answer.fork,backend==='process'&&process.platform==='darwin'?null:0);
+  assert.equal(answer.markerRead,'blocked');assert.equal(answer.markerRemove,'blocked');assert.equal(answer.key,'sandbox-host-broker');assert.equal(answer.model,'model-ok');assert.equal(calls,1);
+  assert.equal(answer.fork,0);assert.deepEqual(answer.child,{read:'blocked',write:'blocked',signal:'blocked'});
   assert.equal(await readFile(join(f.work,'workspace/ok.txt'),'utf8'),'sandbox');
   await candidate.stop();assert.equal(await readFile(secret,'utf8'),'private');
   if(backend==='container')assert.notEqual(spawnSync('docker',['inspect',`seeda-eval-${candidate.id}`]).status,0);
@@ -71,7 +73,7 @@ test('malformed output fails rather than becoming evaluation evidence', {skip:!p
  try{await assert.rejects(candidate.ready,/Invalid/);}finally{await candidate.stop().catch(()=>{});await rm(f.root,{recursive:true,force:true});}
 });
 test('guardian reclaims workload when supervisor is killed', {skip:!processSupported,timeout:15000},async()=>{
- const f=await fixture();await writeFile(join(f.runtime,'src/runtime/worker.ts'),`import{writeFileSync}from'node:fs';import{spawn}from'node:child_process';const cwd=process.argv[2];writeFileSync(cwd+'/pid',String(process.pid));if(process.platform==='linux')spawn(process.execPath,['-e',\`const fs=require('fs');setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),10)\`,cwd+'/heartbeat'],{detached:true,stdio:'ignore'}).unref();setInterval(()=>writeFileSync(cwd+'/heartbeat',String(Date.now())),10);`);
+ const f=await fixture();await writeFile(join(f.runtime,'src/runtime/worker.ts'),`import{writeFileSync}from'node:fs';import{spawn}from'node:child_process';const cwd=process.argv[2];writeFileSync(cwd+'/pid',String(process.pid));spawn(process.execPath,['-e',\`const fs=require('fs');setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),10)\`,cwd+'/heartbeat'],{detached:true,stdio:'ignore'}).unref();setInterval(()=>writeFileSync(cwd+'/heartbeat',String(Date.now())),10);`);
  const launcher=join(f.root,'launcher.mjs');
  await writeFile(launcher,`import{SandboxCandidate}from ${JSON.stringify('file://'+resolve('src/sandbox/candidate.ts'))};new SandboxCandidate('process',${JSON.stringify(f.runtime)},${JSON.stringify(f.work)},()=>{});process.send('started');`);
  const parent=fork(launcher,[],{execArgv:['--experimental-strip-types'],stdio:['ignore','ignore','ignore','ipc']});
@@ -128,4 +130,56 @@ test('guardian deadline terminates an unresponsive workload', {timeout:10000},as
  const exit=new Promise(r=>child.once('exit',r));
  child.send({type:'start',command:process.execPath,args:['-e','setInterval(()=>{},1000)'],env:{},timeoutMs:100});
  await exit;assert.match(failure,/timed out/);
+});
+test('macOS process runs Bash, Node tests, TypeScript, npm and Git without Docker', {skip:process.platform!=='darwin',timeout:20000},async t=>{
+ const f=await fixture();let calls=0;const events: {type:string;result?:{exit_code:number;output:string}}[]=[];
+ const command="set -e; pwd; node --version; tsc --version; npm --version; git init -q .; git status --short; printf 'import {test} from \"node:test\";test(\"child test\",()=>{});' > child.test.mjs; node --test child.test.mjs";
+ const server=createServer(async(req,res)=>{for await(const _ of req){};const delta=calls++===0?{tool_calls:[{index:0,id:'coding-check',type:'function',function:{name:'bash',arguments:JSON.stringify({command})}}]}:{content:'coding tools verified'};res.setHeader('Content-Type','text/event-stream');res.end(`data: ${JSON.stringify({choices:[{delta,finish_reason:calls===1?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`);});
+ await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const address=server.address();assert.ok(address&&typeof address!=='string');
+ const previous={DEEPSEEK_API_KEY:process.env.DEEPSEEK_API_KEY,DEEPSEEK_BASE_URL:process.env.DEEPSEEK_BASE_URL,SEEDA_SYSTEM_PROXY:process.env.SEEDA_SYSTEM_PROXY};
+ process.env.DEEPSEEK_API_KEY='local-tools-check';process.env.DEEPSEEK_BASE_URL=`http://127.0.0.1:${address.port}`;process.env.SEEDA_SYSTEM_PROXY='0';
+ const candidate=new SandboxCandidate('process',resolve('.'),f.work,event=>events.push(event as typeof events[number]));
+ t.after(async()=>{await candidate.stop().catch(()=>{});server.closeAllConnections();server.close();await rm(f.root,{recursive:true,force:true});for(const[k,v]of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
+ assert.equal(await candidate.run('Run the coding checks'),'coding tools verified');
+ const result=events.find(e=>e.type==='tool_end')?.result;assert.equal(result?.exit_code,0,JSON.stringify(result));assert.match(result!.output,/child test/);assert.equal(calls,2);
+});
+test('macOS cleanup reclaims reparented children without touching another sandbox', {skip:process.platform!=='darwin',timeout:20000},async()=>{
+ const f=await fixture();
+ await writeFile(join(f.runtime,'src/runtime/worker.ts'),`import{spawnSync}from'node:child_process';import{writeFileSync}from'node:fs';const work=process.argv[2];process.send({type:'ready'});process.on('message',m=>{const code="const{spawn}=require('child_process');const c=spawn(process.execPath,['-e',\\\"const fs=require('fs');setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),10)\\\",process.argv[1]],{detached:true,stdio:'ignore'});c.unref();";const p=spawnSync(process.execPath,['-e',code,work+'/beat']);if(p.status!==0)throw new Error(String(p.stderr));process.send({type:'result',answer:'spawned'});if(m.input==='exit')setTimeout(()=>process.exit(0),50);});setInterval(()=>writeFileSync(work+'/root-beat',String(Date.now())),10);`);
+ const a=new SandboxCandidate('process',f.runtime,join(f.root,'a'),()=>{});const b=new SandboxCandidate('process',f.runtime,join(f.root,'b'),()=>{});
+ try{
+  assert.equal(await a.run('exit'),'spawned');assert.equal(await b.run('start'),'spawned');await new Promise(r=>setTimeout(r,100));
+  await new Promise(r=>setTimeout(r,150));const before=await readFile(join(f.root,'a/workspace/beat'),'utf8');const other=await readFile(join(f.root,'b/workspace/beat'),'utf8');
+  await new Promise(r=>setTimeout(r,150));assert.equal(await readFile(join(f.root,'a/workspace/beat'),'utf8'),before);assert.notEqual(await readFile(join(f.root,'b/workspace/beat'),'utf8'),other);
+  process.kill(process.pid,0);
+ }finally{await a.stop().catch(()=>{});await b.stop().catch(()=>{});await rm(f.root,{recursive:true,force:true});}
+});
+test('macOS cancellation and guardian deadline reclaim detached children', {skip:process.platform!=='darwin',timeout:20000},async()=>{
+ const f=await fixture();
+ const childCode="const fs=require('fs');setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),10)";
+ await writeFile(join(f.runtime,'src/runtime/worker.ts'),`import{spawn}from'node:child_process';const work=process.argv[2];spawn(process.execPath,['-e',${JSON.stringify(childCode)},work+'/beat'],{detached:true,stdio:'ignore'}).unref();process.send({type:'ready'});setInterval(()=>{},1000);`);
+ const candidate=new SandboxCandidate('process',f.runtime,f.work,()=>{});
+ const stoppedWriting=async(path:string)=>{const before=await readFile(path,'utf8');await new Promise(r=>setTimeout(r,120));assert.equal(await readFile(path,'utf8'),before);};
+ try{
+  await candidate.ready;await new Promise(r=>setTimeout(r,100));const running=assert.rejects(candidate.run('block'),/cancelled/);candidate.cancel();await running;await candidate.stop();await stoppedWriting(join(f.work,'workspace/beat'));
+  // Exercise the same host guardian with a short deadline, without waiting 120 seconds.
+  const work=join(f.root,'timeout');await mkdir(work);await writeFile(join(work,'.host-only'),'');const{realpath}=await import('node:fs/promises');const canonical=await realpath(work);const runtime=await realpath(f.runtime);
+  const guardian=fork(resolve('src/sandbox/guardian.mjs'),[],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});
+  let failure='';guardian.on('message',(m:{type:string;error?:string})=>{if(m.type==='failure')failure=m.error??'';});const exit=new Promise(r=>guardian.once('exit',r));
+  guardian.send({type:'start',command:'/usr/bin/sandbox-exec',args:['-p',macProfile(runtime,canonical),process.execPath,resolve('src/sandbox/bridge.mjs'),join(runtime,'src/runtime/worker.ts'),canonical],env:{PATH:'/usr/bin:/bin',SEEDA_SANDBOX_VERIFY:'1'},macCleanup:[canonical,join(canonical,'.host-only')],timeoutMs:500});
+  await exit;assert.match(failure,/timed out/);await stoppedWriting(join(work,'beat'));process.kill(process.pid,0);
+ }finally{await candidate.stop().catch(()=>{});await rm(f.root,{recursive:true,force:true});}
+});
+test('macOS refuses candidate loading when kernel ownership cannot be verified', {skip:process.platform!=='darwin',timeout:10000},async()=>{
+ const f=await fixture();await mkdir(f.work);await writeFile(join(f.work,'.host-only'),'');
+ await writeFile(join(f.runtime,'src/runtime/worker.ts'),`import{writeFileSync}from'node:fs';writeFileSync(process.argv[2]+'/loaded','unsafe');setInterval(()=>{},1000);`);
+ const{realpath}=await import('node:fs/promises');const work=await realpath(f.work);const runtime=await realpath(f.runtime);
+ // Simulate an unsupported/incorrect policy. Only the trusted bridge can run.
+ const denied=`(deny file-read* file-write* (literal ${JSON.stringify(join(work,'.host-only'))}))`;
+ const profile=macProfile(runtime,work).replace(denied,'');assert.ok(!profile.includes('.host-only'));
+ const guardian=fork(resolve('src/sandbox/guardian.mjs'),[],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});
+ let failure='';guardian.on('message',(m:{type:string;error?:string})=>{if(m.type==='failure')failure=m.error??'';});const exit=new Promise(r=>guardian.once('exit',r));
+ guardian.send({type:'start',command:'/usr/bin/sandbox-exec',args:['-p',profile,process.execPath,resolve('src/sandbox/bridge.mjs'),join(runtime,'src/runtime/worker.ts'),work],env:{SEEDA_SANDBOX_VERIFY:'1'},macCleanup:[work,join(work,'.host-only')],timeoutMs:3000});
+ try{await exit;assert.match(failure,/Cannot verify/);await assert.rejects(readFile(join(work,'loaded')));process.kill(process.pid,0);}
+ finally{guardian.kill('SIGKILL');await rm(f.root,{recursive:true,force:true});}
 });

@@ -69,7 +69,7 @@ test('Bash timeout and cancellation terminate a process tree', async t => {
   const w = await workspace(t);
   const tool = new BashTool();
   const timeout = await tool.execute({ command: '(sleep 1; touch orphan) & wait', timeout: 0.05 }, { ...w, signal: new AbortController().signal }) as { status: string };
-  assert.equal(timeout.status, 'timed_out');
+  assert.equal(timeout.status, 'timed_out', JSON.stringify(timeout));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 50);
   const cancelled = await tool.execute({ command: 'sleep 10' }, { ...w, signal: controller.signal }) as { status: string };

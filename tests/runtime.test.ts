@@ -83,7 +83,7 @@ test('managed runtime retains versions, isolates candidate, drains requests, res
   assert.notEqual(a.runtime_path, b.runtime_path);
   const lightweight = await supervisor.manage({ operation: 'evaluate', version: b.id, task: 'prompt-only' }) as { status: string; sandbox: string; answer: string };
   assert.equal(lightweight.status, 'completed'); assert.equal(lightweight.sandbox, 'process'); assert.equal(lightweight.answer, 'done');
-  const evaluating = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'candidate-task', sandbox: 'container' });
+  const evaluating = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'candidate-task' });
   await until(() => Number(store.db.prepare("SELECT count(*) AS n FROM instances WHERE role='candidate' AND ended_at IS NULL").get()!.n) === 1);
   assert.equal(await client.run('A remains available'), 'done');
   const evaluation = await evaluating as { evaluation: string; workspace: string; status: string };
