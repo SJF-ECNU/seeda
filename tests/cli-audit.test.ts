@@ -17,6 +17,7 @@ test('all supervisor commands reach management RPC with their arguments, never r
   [['draft'],{operation:'manage',args:{operation:'draft'}}],
   [['submit','draft-id','reason'],{operation:'manage',args:{operation:'submit',draft:'draft-id',reason:'reason'}}],
   [['evaluate','version-id','task'],{operation:'manage',args:{operation:'evaluate',version:'version-id',task:'task'}}],
+  [['evaluate','version-id','task','container'],{operation:'manage',args:{operation:'evaluate',version:'version-id',task:'task',sandbox:'container'}}],
   [['evidence','eval-id'],{operation:'manage',args:{operation:'evidence',evaluation:'eval-id'}}],
   [['decide','eval-id','accept','reason'],{operation:'manage',args:{operation:'decide',evaluation:'eval-id',decision:'accept',reason:'reason'}}],
   [['promote','version-id','eval-id','reason'],{operation:'manage',args:{operation:'promote',version:'version-id',evaluation:'eval-id',reason:'reason'}}],
@@ -30,7 +31,7 @@ test('all supervisor commands reach management RPC with their arguments, never r
 test('strict CLI rejects control typos and malformed arguments before resources are opened',async t=>{
  const root=await mkdtemp('/tmp/seeda-audit-errors-'); t.after(()=>rm(root,{recursive:true,force:true}));
  const env={...process.env,SEEDA_HOME:join(root,'state'),SEEDA_LIBRARY:join(root,'library'),DEEPSEEK_API_KEY:''};
- const invalid=[['publsih'],['version'],['help','extra'],['status','extra'],['stop','extra'],['strains','oops'],['strains','default'],['seed','origin','extra'],['publish'],['publish','name'],['publish','name','--intro'],['publish','name','--intro','one','--intro','two'],['publish','name','version','extra','--intro','one'],['/use'],['/new','extra'],['/unknown'],['run'],['run',''],['run','--unknown'],['decide','eval','maybe','reason'],['submit','draft'],['evaluate','version'],['promote','version','eval']];
+ const invalid=[['publsih'],['version'],['help','extra'],['status','extra'],['stop','extra'],['strains','oops'],['strains','default'],['seed','origin','extra'],['publish'],['publish','name'],['publish','name','--intro'],['publish','name','--intro','one','--intro','two'],['publish','name','version','extra','--intro','one'],['/use'],['/new','extra'],['/unknown'],['run'],['run',''],['run','--unknown'],['decide','eval','maybe','reason'],['submit','draft'],['evaluate','version'],['evaluate','version','task','none'],['promote','version','eval']];
  for(const args of invalid){ await assert.rejects(exec(resolve('src/cli.ts'),args,{cwd:root,env,timeout:3000}),error=>{assert.equal((error as {code:number}).code,2,args.join(' '));return true;}); }
  for(const args of [['seed','a','b'],['not-command'],['publish','name','--intro']]) await assert.rejects(exec(process.execPath,['--experimental-strip-types',resolve('src/runtime/cli.ts'),...args],{cwd:root,env}),error=>{assert.equal((error as {code:number}).code,2);return true;});
  assert.deepEqual(await readdir(root),[]);

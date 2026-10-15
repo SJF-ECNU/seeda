@@ -2,7 +2,7 @@ import { cp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const snapshotFiles = ['src', 'tests', '.agents', 'AGENTS.md', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json'];
-const external = ['src/cli.ts', 'src/cli-arguments.ts', 'src/tui', 'src/versions', 'src/strains', 'bin', 'scripts'];
+const external = ['src/cli.ts', 'src/cli-arguments.ts', 'src/tui', 'src/versions', 'src/strains', 'src/sandbox', 'bin', 'scripts'];
 
 export async function agentOnly(path: string): Promise<void> {
   for (const file of external) await rm(join(path, file), { recursive: true, force: true });
@@ -16,7 +16,7 @@ export async function agentOnly(path: string): Promise<void> {
       if (file.isDirectory()) { await filterTests(target); continue; }
       if (!file.name.endsWith('.ts')) continue;
       const source = await readFile(target, 'utf8');
-      if (/src\/(?:tui|versions|strains|runtime|cli)|exec\(['"]seeda['"]/.test(source)) await rm(target);
+      if (/src\/(?:tui|versions|strains|runtime|sandbox|cli)|exec\(['"]seeda['"]/.test(source)) await rm(target);
     }
   };
   await filterTests(join(path, 'tests'));

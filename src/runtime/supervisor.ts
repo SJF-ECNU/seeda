@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentEvent } from '../core/types.ts';
 import { VersionStore, type Version, type SeedOrigin } from '../versions/store.ts';
 import { WorkerProcess } from './process.ts';
+import { SandboxCandidate, sandboxBackend } from '../sandbox/candidate.ts';
 import { sessionPath, sessionHistory, listSessions } from './sessions.ts';
 
 export class Supervisor {
@@ -18,7 +19,7 @@ export class Supervisor {
   private ownsSocket = false;
   private sockets = new Set<Socket>();
   private primary?: WorkerProcess;
-  private candidate?: WorkerProcess;
+  private candidate?: SandboxCandidate;
   private listener?: (event: AgentEvent) => void;
   private switching?: Promise<void>;
   private switchId?: string;
@@ -143,27 +144,38 @@ export class Supervisor {
     })().finally(() => { this.switching = undefined; this.switchId = undefined; });
     await this.switching;
   }
-  private async evaluate(version: string, task: string, source: string): Promise<unknown> {
+  private async evaluate(version: string, task: string, source: string, requestedSandbox?: unknown): Promise<unknown> {
     if (this.evaluationBusy || this.switching || this.recovering) throw new Error('A candidate evaluation or switch is already active');
     if (!task.trim()) throw new Error('Evaluation task is required');
+    const sandbox = sandboxBackend(requestedSandbox);
     const target = this.store.version(version);
     if (target.parent_id !== source) throw new Error('Candidate must descend from the current source');
     this.evaluationBusy = true;
-    const id = randomUUID(); const dir = join(this.store.root, 'evaluations', id); const cwd = join(dir, 'workspace'); const evidence = join(dir, 'result.json');
+    const id = randomUUID(); const dir = join(this.store.root, 'evaluations', id); const cwd = join(dir, 'sandbox/workspace'); const evidence = join(dir, 'result.json');
     try {
       await mkdir(cwd, { recursive: true, mode: 0o700 });
       this.store.db.prepare("INSERT INTO evaluations(id,source_version,candidate_version,status,evidence_path) VALUES(?,?,?,'running',?)").run(id, source, version, evidence);
       const events: AgentEvent[] = []; let answer = ''; let status = 'failed'; let error: string | undefined;
-      this.candidate = new WorkerProcess(this.store, target, cwd, join(dir, 'session.jsonl'), join(dir, 'outputs'), 'candidate', event => events.push(event), async () => { throw new Error('Candidates cannot manage versions'); }, () => {},
-        Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'BRAVE_API_KEY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'].includes(key))));
-      let forcedStop: NodeJS.Timeout | undefined;
-      const timeout = setTimeout(() => { this.candidate?.cancel(); forcedStop = setTimeout(() => { void this.candidate?.stop(); }, 2500); }, 120_000);
-      try { await this.candidate.ready; answer = await this.candidate.run(task); status = 'completed'; }
-      catch (failure) { error = failure instanceof Error ? failure.message : 'Candidate failed'; status = events.some(event => event.type === 'end' && event.status === 'cancelled') ? 'cancelled' : 'failed'; }
-      finally { clearTimeout(timeout); if (forcedStop) clearTimeout(forcedStop); await this.candidate.stop(); this.candidate = undefined; }
-      await writeFile(evidence, JSON.stringify({ id, source, version, task, status, answer, error, events, cwd }, null, 2), { mode: 0o600 });
+      const candidate = new SandboxCandidate(sandbox, target.runtime_path, join(dir, 'sandbox'), event => events.push(event));
+      this.candidate = candidate;
+      this.store.db.prepare("INSERT INTO instances(id,version_id,role,state) VALUES(?,?,'candidate','starting')").run(candidate.id, version);
+      const timeout = setTimeout(() => candidate.cancel(), 120_000);
+      try {
+        await candidate.ready;
+        this.store.db.prepare("UPDATE instances SET state='ready' WHERE id=?").run(candidate.id);
+        answer = await candidate.run(task); status = 'completed';
+      } catch (failure) {
+        error = failure instanceof Error ? failure.message : 'Candidate failed';
+        status = candidate.wasCancelled ? 'cancelled' : 'failed';
+      } finally {
+        clearTimeout(timeout);
+        try { await candidate.stop(); } catch (failure) { status = 'failed'; error = failure instanceof Error ? failure.message : 'Sandbox cleanup failed'; }
+        this.candidate = undefined;
+        this.store.db.prepare("UPDATE instances SET state=?,reason=?,ended_at=CURRENT_TIMESTAMP WHERE id=?").run(status, error ?? null, candidate.id);
+      }
+      await writeFile(evidence, JSON.stringify({ id, source, version, task, sandbox, status, answer, error, events, cwd: join(dir, 'sandbox/workspace') }, null, 2), { mode: 0o600 });
       this.store.db.prepare('UPDATE evaluations SET status=? WHERE id=?').run(status, id);
-      return { evaluation: id, status, answer, evidence_path: evidence, workspace: cwd };
+      return { evaluation: id, status, answer, error, evidence_path: evidence, workspace: join(dir, 'sandbox/workspace'), sandbox };
     } finally { this.evaluationBusy = false; }
   }
   async manage(args: Record<string, unknown>, source = this.store.state().current_version!): Promise<unknown> {
@@ -181,7 +193,7 @@ export class Supervisor {
       }
       case 'draft': return this.store.draft(source);
       case 'submit': return this.store.submit(str('draft'), str('reason'));
-      case 'evaluate': return this.evaluate(str('version'), str('task'), source);
+      case 'evaluate': return this.evaluate(str('version'), str('task'), source, args.sandbox);
       case 'evidence': return JSON.parse(await readFile(this.store.evaluation(str('evaluation')).evidence_path, 'utf8'));
       case 'decide': this.store.decision(str('evaluation'), source, str('decision'), str('reason')); return { status: 'recorded' };
       case 'promote': {

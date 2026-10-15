@@ -83,9 +83,9 @@ if (command === 'strains' || command === 'seed' || command === 'publish') {
     if (command === 'select') result = await client.request('select', { version: args[0] });
     else if (command === 'stop') result = await client.request('stop');
     else {
-      const names: Record<string, string[]> = { status: [], draft: [], submit: ['draft', 'reason'], evaluate: ['version', 'task'], evidence: ['evaluation'], decide: ['evaluation', 'decision', 'reason'], promote: ['version', 'evaluation', 'reason'], rollback: ['reason'] };
+      const names: Record<string, string[]> = { status: [], draft: [], submit: ['draft', 'reason'], evaluate: ['version', 'task', 'sandbox'], evidence: ['evaluation'], decide: ['evaluation', 'decision', 'reason'], promote: ['version', 'evaluation', 'reason'], rollback: ['reason'] };
       if (!names[command]) throw new Error('Use strains, seed, publish, init, serve, status, draft, submit, evaluate, evidence, decide, promote, rollback, select or stop');
-      result = await client.request('manage', { operation: command, ...Object.fromEntries(names[command].map((name, index) => [name, args[index]])) });
+      result = await client.request('manage', { operation: command, ...Object.fromEntries(names[command].filter((_, index) => args[index] !== undefined).map((name, index) => [name, args[index]])) });
     }
     console.log(JSON.stringify(result, null, 2));
   } finally { client.close(); }

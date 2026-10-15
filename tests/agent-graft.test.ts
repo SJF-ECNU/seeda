@@ -46,7 +46,7 @@ test('Agent grafts through existing Bash/Git and management tools, verifies, pro
         if (result.exit_code !== 0) text = 'Conflict retained in the draft; primary unchanged.';
         else { name = 'management'; args = { operation: 'submit', draft: draft.id, reason: `Graft ${strain.id}: ${origin.git_commit} -> ${strain.git_commit}; src/grafted-feature.ts` }; }
       }
-      if (phase === 5) { version = result; name = 'management'; args = { operation: 'evaluate', version: version.id, task: `verify graft at ${version.runtime_path}` }; }
+      if (phase === 5) { version = result; name = 'management'; args = { operation: 'evaluate', version: version.id, task: 'verify graft at /candidate', sandbox: 'container' }; }
       if (phase === 6) { evaluation = result; name = 'management'; args = { operation: 'evidence', evaluation: evaluation.evaluation }; }
       if (phase === 7) {
         evidenceVerified = result.status === 'completed' && result.answer === 'verified graft' && result.events.some((item: {type:string;result?:{exit_code:number;output:string}}) => item.type === 'tool_end' && item.result?.exit_code === 0 && item.result.output.includes('grafted'));

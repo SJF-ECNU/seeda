@@ -20,7 +20,7 @@ status: current
 | `serve [PROJECT]` | 前台运行守护 |
 | `status`、`draft`、`stop` | 查询状态、创建候选、停止现有守护 |
 | `submit DRAFT REASON` | 保存候选改动 |
-| `evaluate VERSION TASK` | 启动候选验证任务；这是明确的验证操作 |
+| `evaluate VERSION TASK [process或container]` | 沙箱验证；默认 process，none 或未知后端被拒绝 |
 | `evidence EVALUATION` | 查询验证证据 |
 | `decide EVALUATION accept或reject REASON` | 记录质量判断 |
 | `promote VERSION EVALUATION REASON` | 根据已接受验证接替主版本 |

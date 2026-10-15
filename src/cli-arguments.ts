@@ -16,7 +16,8 @@ export const help = `用法：seeda                         进入 TUI，新项�
 运行管理：
   status | draft | stop             状态、创建候选、停止守护
   submit DRAFT REASON               保存候选
-  evaluate VERSION TASK            独立验证
+  evaluate VERSION TASK [process|container]
+                                   沙箱验证，默认 process
   evidence EVALUATION               查询证据
   decide EVALUATION accept|reject REASON
   promote VERSION EVALUATION REASON
@@ -64,8 +65,9 @@ export function managementArgs(argv: string[], internal = false): string[] {
     if (args[0]!=='default') throw new UsageError(`未知 strains 操作：${args[0]}`);
     arity(args,2); return [command,...args];
   }
-  const counts: Record<string,[number,number]> = {seed:[0,1],init:[0,1],serve:[0,1],'auto-serve':[1,1],status:[0,0],draft:[0,0],stop:[0,0],submit:[2,2],evaluate:[2,2],evidence:[1,1],decide:[3,3],promote:[3,3],rollback:[1,1],select:[1,1]};
+  const counts: Record<string,[number,number]> = {seed:[0,1],init:[0,1],serve:[0,1],'auto-serve':[1,1],status:[0,0],draft:[0,0],stop:[0,0],submit:[2,2],evaluate:[2,3],evidence:[1,1],decide:[3,3],promote:[3,3],rollback:[1,1],select:[1,1]};
   arity(args,...counts[command]);
+  if (command==='evaluate' && args[2] !== undefined && !['process','container'].includes(args[2])) throw new UsageError('evaluate 沙箱需要 process 或 container');
   if (command==='decide' && !['accept','reject'].includes(args[1])) throw new UsageError('decide 需要 accept 或 reject');
   return [command,...args];
 }

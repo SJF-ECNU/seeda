@@ -42,7 +42,7 @@ TUI 中 `/versions` 查看版本，`/use 完整版本ID` 选择版本，`/rollba
 
 ## 数据与版本
 
-数据根保存 `repository/`、`versions/`、`drafts/`、`state.db`、`sessions/main.jsonl`、`evaluations/` 和 `outputs/`。根目录限制为当前用户，socket 和会话文件同样限制读写。模型凭据只走环境变量，候选只传模型连接和基础网络环境，不传任意服务环境变量。目录隔离不构成同用户权限沙箱。
+数据根保存 `repository/`、`versions/`、`drafts/`、`state.db`、`sessions/main.jsonl`、`evaluations/` 和 `outputs/`。根目录限制为当前用户，socket 和会话文件同样限制读写。主实例凭据通过环境变量提供；evaluate 候选不继承真实 HOME、API Key 或代理配置，模型调用经宿主固定出口完成。候选从代码加载前进入系统沙箱或容器；详见 [[docs/evaluate沙箱]]。
 
 首次导入只包含实现代码、测试、脚本、Skill、AGENTS.md、README、package/锁文件和 tsconfig，不导入 `.env`、用户 session 或运行产物。候选提交同样采用这些路径，普通用户项目改动不进入引擎版本库。
 
@@ -57,11 +57,11 @@ SQLite 保存 versions、drafts、evaluations、instances、runtime_state、swit
 1. `status` 查看当前版本、历史与评价；`draft` 从当前版本产生候选编辑目录。
 2. 用 Bash 在该编辑目录修改实现和测试；先复现失败，再验证改动。
 3. `submit` 传 draft 和 reason，形成 Git 提交、独立依赖和候选版本 B。
-4. `evaluate` 传 version 和 task，由 B 在独立工作目录及会话中执行真实任务。主 A 仍存活，另一个前端请求可在 A 空闲时执行。一次最多运行一个候选验证；验证任务需要在独立目录准备自己的测试输入。
+4. `evaluate` 传 version、task 和可选 sandbox（process/container，默认 process），由 B 在沙箱内的独立工作目录及会话中执行真实任务。主 A 仍存活，另一个前端请求可在 A 空闲时执行。一次最多运行一个候选验证；验证任务需要在独立目录准备自己的测试输入。
 5. `evidence` 获取原始验证记录。A 用 `decide` 传 evaluation、accept/reject 和具体 reason；只有完成的验证能记录 accept。
 6. `promote` 传 version、evaluation 和 reason；当前 A 对该 B 的接受记录满足生命周期条件后，守护在请求边界接替。A 也可用 `rollback` 和 reason 请求质量回退。
 
-候选只具备模型与 Bash，没有 management 工具。候选验证历史不复制到正式用户会话。候选使用与主版本相同的模型连接配置，评价不是模型或参数差异造成的效果声明。
+候选没有 management 工具；macOS process 后端为单进程，Bash 不可用，需要 Bash 时选择 container。候选验证历史不复制到正式用户会话。候选使用与主版本相同的模型连接配置，评价不是模型或参数差异造成的效果声明。
 
 相同操作也可通过管理 CLI 运行，用于手动检查和演练：
 
@@ -69,7 +69,8 @@ SQLite 保存 versions、drafts、evaluations、instances、runtime_state、swit
 npm run manage -- status
 npm run manage -- draft
 npm run manage -- submit DRAFT_ID '修改原因'
-npm run manage -- evaluate VERSION_ID '独立验证任务'
+npm run manage -- evaluate VERSION_ID '轻量 prompt 验证任务' process
+npm run manage -- evaluate VERSION_ID '在 /candidate 中检查实现并运行测试' container
 npm run manage -- evidence EVALUATION_ID
 npm run manage -- decide EVALUATION_ID accept '具体证据与理由'
 npm run manage -- promote VERSION_ID EVALUATION_ID '接替原因'
@@ -80,7 +81,7 @@ npm run manage -- select VERSION_ID
 
 ## 存活、取消与恢复
 
-worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 秒未收到心跳则终止失联 worker。正常异步模型等待不阻塞心跳。候选任务上限 120 秒；超时先取消，未响应则终止候选。
+worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 秒未收到心跳则终止失联 worker。正常异步模型等待不阻塞心跳。evaluate 整体上限 120 秒（含容器依赖准备）；候选取消或超时直接终止沙箱并回收。独立 guardian 在宿主退出时继续清理候选，不信任候选上报的 PID。
 
 当前进程意外退出时，守护先清理已登记的 Bash 进程组，再启动 previous；没有 previous 时重启 current。故障连续重试最多三次，仍不可恢复则标记 failed，避免无限崩溃循环。正常完成一个用户请求后清零次数。
 

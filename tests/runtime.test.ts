@@ -81,11 +81,13 @@ test('managed runtime retains versions, isolates candidate, drains requests, res
   await writeFile(join(draft.path, 'src/runtime/worker.ts'), legacyReady.replace('messages: session.messages, compact: true', 'messages: session.messages'));
   const b = await store.submit(draft.id, 'candidate B');
   assert.notEqual(a.runtime_path, b.runtime_path);
-  const evaluating = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'candidate-task' });
+  const lightweight = await supervisor.manage({ operation: 'evaluate', version: b.id, task: 'prompt-only' }) as { status: string; sandbox: string; answer: string };
+  assert.equal(lightweight.status, 'completed'); assert.equal(lightweight.sandbox, 'process'); assert.equal(lightweight.answer, 'done');
+  const evaluating = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'candidate-task', sandbox: 'container' });
   await until(() => Number(store.db.prepare("SELECT count(*) AS n FROM instances WHERE role='candidate' AND ended_at IS NULL").get()!.n) === 1);
   assert.equal(await client.run('A remains available'), 'done');
   const evaluation = await evaluating as { evaluation: string; workspace: string; status: string };
-  assert.equal(evaluation.status, 'completed');
+  assert.equal(evaluation.status, 'completed', JSON.stringify(evaluation));
   assert.equal(await readFile(join(evaluation.workspace, 'candidate.txt'), 'utf8'), 'isolated');
   await assert.rejects(readFile(join(cwd, 'candidate.txt')));
   await assert.rejects(supervisor.manage({ operation: 'promote', version: b.id, evaluation: evaluation.evaluation, reason: 'better' }), /acceptance/);
@@ -93,11 +95,11 @@ test('managed runtime retains versions, isolates candidate, drains requests, res
   assert.equal(failedEvaluation.status, 'failed');
   await assert.rejects(supervisor.manage({ operation: 'decide', evaluation: failedEvaluation.evaluation, decision: 'accept', reason: 'unsupported acceptance' }), /incomplete/);
   await supervisor.manage({ operation: 'decide', evaluation: failedEvaluation.evaluation, decision: 'reject', reason: 'Model request failed; no completed verification' });
-  const cancellation = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'block' });
+  const cancellation = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'block', sandbox: 'container' });
   let candidatePid = '';
-  for (let i = 0; i < 100 && !candidatePid; i++) {
+  for (let i = 0; i < 500 && !candidatePid; i++) {
     const latest = store.db.prepare("SELECT evidence_path FROM evaluations WHERE status='running'").get() as { evidence_path: string } | undefined;
-    if (latest) { try { candidatePid = await readFile(join(latest.evidence_path, '../workspace/block.pid'), 'utf8'); } catch {} }
+    if (latest) { try { candidatePid = await readFile(join(latest.evidence_path, '../sandbox/workspace/block.pid'), 'utf8'); } catch {} }
     if (!candidatePid) await new Promise(r => setTimeout(r, 30));
   }
   assert.ok(candidatePid); supervisor.cancel();

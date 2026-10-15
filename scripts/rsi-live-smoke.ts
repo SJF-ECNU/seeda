@@ -15,7 +15,7 @@ try {
 目标：Bash 工具目前不返回命令实际工作目录。给返回对象增加 cwd 字段，其值必须与该次命令真正使用的绝对目录相同，支持参数 cwd 的相对路径。这是观测能力改进；不得改动核心循环、守护、共享数据格式和模型配置。
 先 management status，再 management draft 创建候选编辑目录。只在该目录修改 src/tools/bash.ts 和新 tests/bash-cwd.test.ts。测试用 Node 内置 node:test，在临时目录创建 child 子目录，直接调用该候选的 BashTool，command 为 pwd、cwd 为 child；断言 result.cwd 为 child 的绝对路径，且 result.output.trim() 与 result.cwd 一致。保存临时产物并在测试结束清理。
 先创建测试，用 node --experimental-strip-types --test tests/bash-cwd.test.ts 运行并观察失败，再修改返回 cwd 的实现，再执行相同测试成功。Bash 命令 cwd 指向候选编辑目录，不能编辑正式运行目录或当前项目目录。
-management submit 提交候选并说明原因。拿到 B 的 runtime_path 后，management evaluate 的 task 要求 B 用 Bash 执行 node --experimental-strip-types --test <B runtime_path>/tests/bash-cwd.test.ts，再在它自己的独立工作目录执行 pwd，通过工具返回 cwd 与 pwd 输出核对，并说明结果。B 的验证环境没有 management 工具。
+management submit 提交候选并说明原因。management evaluate 显式传 sandbox=container，task 要求 B 用 Bash 执行 node --experimental-strip-types --test /candidate/tests/bash-cwd.test.ts，再在它自己的独立工作目录执行 pwd，通过工具返回 cwd 与 pwd 输出核对，并说明结果。B 的验证环境没有 management 工具。
 随后 management evidence 读取该 evaluation，实际检查测试 PASS、工具返回 cwd 和任务结果。只有证据符合目标，才能 management decide accept（给具体理由），然后 management promote（version、evaluation、reason），并结束本次请求让切换生效。不要手动 select 或跳过验证。`, event => { events.push(event); if (event.type === 'tool_start') console.log(JSON.stringify({ tool: event.call.function.name })); });
   if (store.state().current_version === a.id) {
     const accepted = store.db.prepare("SELECT id,candidate_version FROM evaluations WHERE source_version=? AND decision='accept' AND status='completed' ORDER BY rowid DESC LIMIT 1").get(a.id) as { id: string; candidate_version: string } | undefined;
