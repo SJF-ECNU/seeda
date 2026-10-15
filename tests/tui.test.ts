@@ -167,3 +167,34 @@ test('outside a paste stray newlines fold to spaces and the draft shows a break 
   assert.ok(display.lines.some(line => line.includes('\u23ce')));
   assert.ok(display.lines.every(line => !line.includes('\n')));
 });
+
+test('layout caches per-entry lines and re-renders only entries whose content changed', () => {
+  const state = new TuiState([], () => {});
+  const user = { kind: 'user' as const, text: 'first message' };
+  const reply = { kind: 'assistant' as const, text: '# Heading\n\nbody **bold**' };
+  state.entries.push(user, reply); state.draft = ['x']; state.cursor = 1;
+
+  const before = layout(state, 60, 20, 'flash');
+  // Streaming grows the assistant reply: its lines must reflect the new text.
+  reply.text = '# Heading\n\nbody **bold** more';
+  const grown = layout(state, 60, 20, 'flash');
+  assert.notDeepEqual(grown.lines, before.lines);
+  assert.ok(grown.lines.some(line => line.includes('more')));
+
+  // Editing an earlier entry must not disturb the cached rendering of the later one.
+  user.text = 'first message edited';
+  const edited = layout(state, 60, 20, 'flash');
+  assert.ok(edited.lines.some(line => line.includes('first message edited')));
+  assert.ok(edited.lines.some(line => line.includes('Heading')));
+
+  // Toggling tool details off again reproduces the earlier frame exactly.
+  state.showToolDetails = true; layout(state, 60, 20, 'flash');
+  state.showToolDetails = false;
+  assert.deepEqual(layout(state, 60, 20, 'flash').lines, edited.lines);
+
+  // Typing only changes the draft; the history rows stay byte-identical while the input row updates.
+  state.draft = ['xy']; state.cursor = 2;
+  const typed = layout(state, 60, 20, 'flash');
+  assert.equal(typed.lines.length, edited.lines.length);
+  assert.notDeepEqual(typed.lines, edited.lines);
+});

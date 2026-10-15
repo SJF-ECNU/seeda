@@ -6,6 +6,14 @@ import { commandMatches } from './commands.ts';
 import { cacheHitRate, contextRatio, formatTokens, type TuiState } from './state.ts';
 
 export interface Layout { lines: string[]; cursorRow: number; cursorColumn: number; }
+
+// Rendering re-wraps and re-parses markdown on every keystroke. That work is
+// proportional to the whole conversation, so a long session makes typing lag.
+// Each entry is therefore rendered once and cached against the entry object,
+// keyed by the inputs that can change its output; a streaming reply re-renders
+// only while its own text grows.
+interface EntryCache { sig: string; lines: string[]; }
+const entryCaches = new WeakMap<TuiState, WeakMap<object, EntryCache>>();
 export function layout(state: TuiState, columns: number, rows: number, title: string, color = process.env.NO_COLOR === undefined): Layout {
   const width = Math.max(1, columns - 1);
   const bodyHeight = Math.max(1, rows - 5);
@@ -20,34 +28,49 @@ export function layout(state: TuiState, columns: number, rows: number, title: st
     return tint(fit(` ${active ? '›' : ' '} ${command.name}${command.argument ? ` ${command.argument}` : ''}  ${command.description}`), active ? '1;36' : '90', color);
   });
   const height = bodyHeight - preview.length;
-  const history = state.entries.flatMap(entry => {
-    if (entry.kind === 'tool') {
-      const name = entry.toolName ?? entry.text.split(' ')[0];
-      let args: Record<string, unknown> = {};
-      try { const value: unknown = JSON.parse(entry.arguments ?? '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) args = value as Record<string, unknown>; } catch { /* Invalid arguments remain available in details. */ }
-      const result = entry.result && typeof entry.result === 'object' ? entry.result as Record<string, unknown> : {};
-      const failed = ['failed', 'timed_out', 'unknown', 'not_executed'].includes(entry.status ?? '');
-      const tone = failed ? '31' : entry.status === 'running' ? '36' : '32';
-      const icon = failed ? '!' : entry.status === 'running' ? '◌' : '✓';
-      const description = name === 'bash' ? (typeof args.command === 'string' ? args.command : '') : (typeof args.operation === 'string' ? args.operation : name);
-      const exit = result.exit_code != null ? ` · 退出 ${result.exit_code}` : '';
-      const statuses: Record<string, string> = { completed: '完成', running: '执行中', failed: '失败', timed_out: '超时', cancelled: '已取消', unknown: '未知', not_executed: '未执行' };
-      const label = name === 'bash' ? 'Bash' : name === 'management' ? 'RSI' : name;
-      const summary = `  ${icon} ${label} · ${statuses[entry.status ?? 'unknown'] ?? entry.status}  ${description.replace(/\s+/g, ' ')}${exit}`;
-      const lines = [tint(fit(summary), tone, color)];
-      if (result.error) lines.push(...wrap(typeof result.error === 'string' ? result.error : JSON.stringify(result.error), contentWidth).map(line => tint(`    ${line}`, '31', color)));
-      if (state.showToolDetails) {
-        lines.push(...wrap(entry.text, contentWidth).map(line => tint(`    ${line}`, '90', color)));
-        const output = typeof result.output === 'string' ? result.output : entry.result !== undefined ? JSON.stringify(entry.result, null, 2) : '';
-        if (output) lines.push(...wrap(output, contentWidth).map(line => tint(`    ${line}`, '90', color)));
-      } else if (result.full_output_path) lines.push(tint(fit(`    日志 ${result.full_output_path}`), '90', color));
-      return [...lines, ''];
-    }
-    if (entry.kind === 'notice') return [...wrap(entry.text, contentWidth).map(line => tint(`  ! ${line}`, '33', color)), ''];
-    const label = entry.kind === 'user' ? '  › 你' : '  ● seeda';
-    const body = entry.kind === 'assistant' ? markdown(entry.text, contentWidth, color) : wrap(entry.text, contentWidth);
-    return [tint(label, entry.kind === 'user' ? '1;32' : '1;36', color), ...body.map(line => `    ${line}`), ''];
-  });
+  // Render each entry at most once per signature; reuse cached lines otherwise.
+  let entryCache = entryCaches.get(state);
+  if (!entryCache) { entryCache = new WeakMap<object, EntryCache>(); entryCaches.set(state, entryCache); }
+  const renderEntry = (entry: TuiState['entries'][number]): string[] => {
+    const details = entry.kind === 'tool' && state.showToolDetails ? '1' : '0';
+    const status = entry.kind === 'tool' ? (entry.status ?? '') : '';
+    const result = entry.kind === 'tool' && entry.result && typeof entry.result === 'object'
+      ? (entry.result as Record<string, unknown>).error ? 'e' : (entry.result as Record<string, unknown>).full_output_path ? 'p' : '' : '';
+    const sig = `${entry.kind}|${entry.text.length}|${entry.text}|${details}|${status}|${result}|${contentWidth}|${color ? 1 : 0}`;
+    const cached = entryCache!.get(entry);
+    if (cached && cached.sig === sig) return cached.lines;
+    const lines = ((): string[] => {
+      if (entry.kind === 'tool') {
+        const name = entry.toolName ?? entry.text.split(' ')[0];
+        let args: Record<string, unknown> = {};
+        try { const value: unknown = JSON.parse(entry.arguments ?? '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) args = value as Record<string, unknown>; } catch { /* Invalid arguments remain available in details. */ }
+        const resultValue = entry.result && typeof entry.result === 'object' ? entry.result as Record<string, unknown> : {};
+        const failed = ['failed', 'timed_out', 'unknown', 'not_executed'].includes(entry.status ?? '');
+        const tone = failed ? '31' : entry.status === 'running' ? '36' : '32';
+        const icon = failed ? '!' : entry.status === 'running' ? '◌' : '✓';
+        const description = name === 'bash' ? (typeof args.command === 'string' ? args.command : '') : (typeof args.operation === 'string' ? args.operation : name);
+        const exit = resultValue.exit_code != null ? ` · 退出 ${resultValue.exit_code}` : '';
+        const statuses: Record<string, string> = { completed: '完成', running: '执行中', failed: '失败', timed_out: '超时', cancelled: '已取消', unknown: '未知', not_executed: '未执行' };
+        const label = name === 'bash' ? 'Bash' : name === 'management' ? 'RSI' : name;
+        const summary = `  ${icon} ${label} · ${statuses[entry.status ?? 'unknown'] ?? entry.status}  ${description.replace(/\s+/g, ' ')}${exit}`;
+        const out = [tint(fit(summary), tone, color)];
+        if (resultValue.error) out.push(...wrap(typeof resultValue.error === 'string' ? resultValue.error : JSON.stringify(resultValue.error), contentWidth).map(line => tint(`    ${line}`, '31', color)));
+        if (state.showToolDetails) {
+          out.push(...wrap(entry.text, contentWidth).map(line => tint(`    ${line}`, '90', color)));
+          const output = typeof resultValue.output === 'string' ? resultValue.output : entry.result !== undefined ? JSON.stringify(entry.result, null, 2) : '';
+          if (output) out.push(...wrap(output, contentWidth).map(line => tint(`    ${line}`, '90', color)));
+        } else if (resultValue.full_output_path) out.push(tint(fit(`    日志 ${resultValue.full_output_path}`), '90', color));
+        return [...out, ''];
+      }
+      if (entry.kind === 'notice') return [...wrap(entry.text, contentWidth).map(line => tint(`  ! ${line}`, '33', color)), ''];
+      const label = entry.kind === 'user' ? '  › 你' : '  ● seeda';
+      const body = entry.kind === 'assistant' ? markdown(entry.text, contentWidth, color) : wrap(entry.text, contentWidth);
+      return [tint(label, entry.kind === 'user' ? '1;32' : '1;36', color), ...body.map(line => `    ${line}`), ''];
+    })();
+    entryCache!.set(entry, { sig, lines });
+    return lines;
+  };
+  const history = state.entries.flatMap(renderEntry);
   if (!history.length) history.push('', ...wrap('你好，我是 seeda。', contentWidth).map(line => tint(`  ${line}`, '1;36', color)), '', ...wrap('描述一个任务，我们从这里开始。', contentWidth).map(line => `  ${line}`), '', tint(fit('  /new 新会话 · /sessions 列表 · /resume ID 恢复 · /compact 压缩'), '90', color));
   const scroll = Math.max(0, Math.min(state.scroll, Math.max(0, history.length - height)));
   state.scroll = scroll;
