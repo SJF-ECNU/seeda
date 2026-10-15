@@ -78,7 +78,20 @@ CLI／TUI 和守护进程属于稳定安装层，始终从安装目录启动，�
 
 主实例 A 创建候选 B；B 使用独立目录和验证会话执行任务，A 根据证据判断是否接受，然后主动调用 RSI 接口请求接替。守护只负责存活，不评价回答或改进质量。旧版本保留供回退；保存的版本不会因安装源码修改而自动升级。图为概览，具体接口与方向以[运行指南](docs/版本守护与RSI运行指南.md)和代码为准。
 
-seeda 提供自我改进的执行和生命周期机制，实际改进由任务驱动；没有默认定时自进化任务。内置记忆只管理 session，项目知识可通过 Skill 使用。Bash 使用当前用户权限执行命令；候选独立目录不等同于系统沙箱。
+seeda 提供自我改进的执行和生命周期机制，实际改进由任务驱动；没有默认定时自进化任务。内置记忆只管理 session，项目知识可通过 Skill 使用。Bash 使用当前用户权限执行命令。候选的独立目录会进一步放进沙箱运行，见下节。
+
+## 候选评估沙箱
+
+候选版本不会在项目目录中直接运行；`seeda evaluate` 及其对应的 `management` 操作会为候选建立沙箱：
+
+| 后端 | 适用 | 实现 |
+|---|---|---|
+| `process` | 轻量、纯 Node 内联逻辑 | macOS `sandbox-exec` 的 Seatbelt 策略；Linux `bubblewrap` 用户命名空间 |
+| `container` | 需要 Bash、安装依赖或启动服务 | Docker：只读根文件系统、去除能力、限制进程数/内存/CPU，候选源码只读挂载于 `/candidate` |
+
+选择规则：`evaluate(version, task, sandbox)` 中 `sandbox` 必须是 `process` 或 `container`；省略时默认为 `process`。**没有未沙箱回退**——后端不可用即评估失败，不会退回到直接执行。
+
+**重要限制**：`process` 后端在 macOS 下只 `allow process-exec` 而 `deny process-fork`，即候选进程本身可以启动，但它**不能创建任何子进程**——因此 Bash 工具会以 `spawn EPERM` 失败。需要 Bash、`tsc`、跑测试或 `git` 的验证**必须**选择 `container`。若一次评估需要工具调用却用了 `process`，评估 agent 将无法执行任何命令。
 
 ## 会话与 TUI
 
