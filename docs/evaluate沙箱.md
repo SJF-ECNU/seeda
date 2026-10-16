@@ -43,3 +43,6 @@ Agent management 同样使用 `{operation: "evaluate", version: "...", task: "..
 本次只修改源码与文档，不重启已有守护、不发布种系、不迁移现有项目。运行中的守护保留启动时的宿主代码，使用新实现需要正常停止并用更新后的安装重新启动。旧主 Agent 的工具描述可能没有 sandbox 字段；可通过新版管理 CLI 显式选择，或按原升级流程更新 Agent 工具描述。
 
 相关设计：[[openspec/changes/native-evaluation-sandbox/design]]；运行流程：[[docs/版本守护与RSI运行指南]]。
+
+## 基础版本后续更新
+当前工作树已补齐结构化执行反馈、evaluate有界摘要、显式acceptReason合并接替和宿主执行接入。旧操作及隔离/回退仍保留，已有种系不会自动升级。细节与实测边界见 [[docs/基础版本最小改造与验证]]。

@@ -7,9 +7,11 @@ import { libraryRoot } from './paths.ts';
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent } from '../core/types.ts';
 import { VersionStore, type Version, type SeedOrigin } from '../versions/store.ts';
+import type { ExecutionEnvironment } from './execution.ts';
 import { WorkerProcess } from './process.ts';
 import { SandboxCandidate, sandboxBackend } from '../sandbox/candidate.ts';
 import { sessionPath, sessionHistory, listSessions } from './sessions.ts';
+import { RuntimeHistory } from '../core/runtime-records.ts';
 
 export class Supervisor {
   readonly store: VersionStore;
@@ -27,14 +29,15 @@ export class Supervisor {
   private recovering = false;
   private evaluationBusy = false;
   private retries = 0;
-  constructor(store: VersionStore, cwd: string) { this.store = store; this.cwd = realpathSync(cwd); this.socketPath = join(store.root, 'control.sock'); }
+  private readonly execution: ExecutionEnvironment;
+  constructor(store: VersionStore, cwd: string, execution: ExecutionEnvironment = { kind: 'local' }) { this.execution = { ...execution }; this.store = store; this.cwd = realpathSync(cwd); this.socketPath = join(store.root, 'control.sock'); }
   private worker(version: Version, role: string, cwd = this.cwd, session = sessionPath(this.store.root, this.sessionId()), artifacts = join(this.store.root, 'outputs')): WorkerProcess {
     // Candidates use only model connection settings, not arbitrary service credentials.
     const env = role === 'primary' ? process.env : Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'SEEDA_THINKING', 'BRAVE_API_KEY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'].includes(key)));
     return new WorkerProcess(this.store, version, cwd, session, artifacts, role,
       event => { if (role === 'primary' && this.primary?.version.id === version.id) this.listener?.(event); },
       args => { if (role !== 'primary' || this.primary?.version.id !== version.id) throw new Error('Only the current primary can manage evolution'); return this.manage(args, version.id); },
-      (worker, error) => { if (this.primary === worker) void this.recoverFailure(error); }, env);
+      (worker, error) => { if (this.primary === worker) void this.recoverFailure(error); }, env, this.execution);
   }
   sessionId(): string {
     return String(this.store.db.prepare('SELECT session FROM session_selection WHERE id=1').get()!.session);
@@ -155,6 +158,7 @@ export class Supervisor {
     try {
       await mkdir(cwd, { recursive: true, mode: 0o700 });
       this.store.db.prepare("INSERT INTO evaluations(id,source_version,candidate_version,status,evidence_path) VALUES(?,?,?,'running',?)").run(id, source, version, evidence);
+      const started = performance.now();
       const events: AgentEvent[] = []; let answer = ''; let status = 'failed'; let error: string | undefined;
       const candidate = new SandboxCandidate(sandbox, target.runtime_path, join(dir, 'sandbox'), event => events.push(event));
       this.candidate = candidate;
@@ -175,7 +179,24 @@ export class Supervisor {
       }
       await writeFile(evidence, JSON.stringify({ id, source, version, task, sandbox, status, answer, error, events, cwd: join(dir, 'sandbox/workspace') }, null, 2), { mode: 0o600 });
       this.store.db.prepare('UPDATE evaluations SET status=? WHERE id=?').run(status, id);
-      return { evaluation: id, status, answer, error, evidence_path: evidence, workspace: join(dir, 'sandbox/workspace'), sandbox };
+      const history = new RuntimeHistory();
+      let recordingComplete = true;
+      try {
+        for (const line of (await readFile(join(dir, 'sandbox/session.jsonl'), 'utf8')).split('\n').filter(Boolean)) {
+          const record = JSON.parse(line);
+          if (record.recordingComplete === false) recordingComplete = false;
+          if (record.type === 'request') history.request(record.id, record.implementationVersion, record.startedAt);
+          if (record.type === 'runtime') history.observe(record.observation);
+        }
+      } catch { recordingComplete = false; }
+      const run = history.recent(1)[0];
+      return { evaluation: id, source_version: source, candidate_version: version, status,
+        answer: answer.slice(0, 4000), answer_truncated: answer.length > 4000,
+        error: error?.slice(0, 2000), error_truncated: (error?.length ?? 0) > 2000,
+        evidence_path: evidence, workspace: cwd, sandbox,
+        summary: { duration_ms: performance.now() - started, recording_complete: recordingComplete && Boolean(run?.measured), model_calls: run?.modelCalls ?? null,
+          tool_calls: run?.toolCalls ?? null, tool_failures: run?.toolFailures ?? null,
+          usage: run?.usage ?? null, missing_usage: run ? run.modelCalls - run.modelCallsWithUsage : null } };
     } finally { this.evaluationBusy = false; }
   }
   async manage(args: Record<string, unknown>, source = this.store.state().current_version!): Promise<unknown> {
@@ -191,15 +212,27 @@ export class Supervisor {
         const library = await StrainLibrary.open(libraryRoot());
         try { return await library.publish(str('name'), this.store, this.store.version(typeof args.version === 'string' ? args.version : source), this.cwd, args.introduction); } finally { library.close(); }
       }
-      case 'draft': return this.store.draft(source);
-      case 'submit': return this.store.submit(str('draft'), str('reason'));
+      case 'draft': return { ...await this.store.draft(source), source_version: source, source_commit: this.store.version(source).git_commit };
+      case 'submit': {
+        const draft = str('draft'); const version = await this.store.submit(draft, str('reason'));
+        return { ...version, source_version: version.parent_id, draft };
+      }
       case 'evaluate': return this.evaluate(str('version'), str('task'), source, args.sandbox);
       case 'evidence': return JSON.parse(await readFile(this.store.evaluation(str('evaluation')).evidence_path, 'utf8'));
       case 'decide': this.store.decision(str('evaluation'), source, str('decision'), str('reason')); return { status: 'recorded' };
       case 'promote': {
         const evaluation = this.store.evaluation(str('evaluation')); const version = str('version');
-        if (evaluation.source_version !== source || evaluation.candidate_version !== version || evaluation.decision !== 'accept' || evaluation.status !== 'completed') throw new Error('Promotion requires source Agent acceptance of a completed candidate evaluation');
-        return this.select(version, 'quality', str('reason'));
+        const reason = str('reason');
+        if (evaluation.source_version !== source || evaluation.candidate_version !== version || evaluation.status !== 'completed') throw new Error('Promotion requires source Agent acceptance of a completed candidate evaluation');
+        if (args.acceptReason !== undefined) {
+          const acceptReason = str('acceptReason');
+          if (this.recovering || this.switching || this.evaluationBusy || this.store.state().switch_target) throw new Error('Runtime is busy changing or evaluating a version');
+          this.store.decision(evaluation.id, source, 'accept', acceptReason);
+          try { return { ...await this.select(version, 'quality', reason) as object, evaluation: evaluation.id, acceptance: 'recorded' }; }
+          catch (error) { return { status: 'accepted_not_switched', version, evaluation: evaluation.id, acceptance: 'recorded', error: error instanceof Error ? error.message : 'Version switch failed' }; }
+        }
+        if (evaluation.decision !== 'accept') throw new Error('Promotion requires source Agent acceptance of a completed candidate evaluation');
+        return this.select(version, 'quality', reason);
       }
       case 'rollback': { const target = this.store.state().previous_version; if (!target) throw new Error('No previous version'); return this.select(target, 'quality', str('reason')); }
       default: throw new Error('Unknown management operation');

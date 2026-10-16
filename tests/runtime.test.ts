@@ -167,7 +167,7 @@ test('killed supervisor releases workers and recovers persisted intent and commi
   const store = await VersionStore.open(join(root, 'state'));
   const a = await store.initialize(resolve('.')); const draft = await store.draft(a.id);
   const workerSource = await readFile(join(draft.path, 'src/runtime/worker.ts'), 'utf8');
-  await writeFile(join(draft.path, 'src/runtime/worker.ts'), workerSource.replace("send({ type: 'ready', messages: session.messages, compact: true });", "await new Promise(resolve => setTimeout(resolve, 2000));\nsend({ type: 'ready', messages: session.messages, compact: true });"));
+  await writeFile(join(draft.path, 'src/runtime/worker.ts'), workerSource.replace("send({ type: 'ready', messages: session.messages,", "await new Promise(resolve => setTimeout(resolve, 2000));\nsend({ type: 'ready', messages: session.messages,"));
   const b = await store.submit(draft.id, 'delay startup for interruption exercise');
   let child: ReturnType<typeof spawn> | undefined;
   const start = async () => {

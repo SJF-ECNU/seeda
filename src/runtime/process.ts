@@ -1,5 +1,6 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { commandExecutor, executeManagedCommand, type ExecutionEnvironment } from './execution.ts';
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent, Message } from '../core/types.ts';
 import type { VersionStore, Version } from '../versions/store.ts';
@@ -25,14 +26,17 @@ export class WorkerProcess {
   private groups = new Set<number>();
   private lastHeartbeat = performance.now();
   private interval: NodeJS.Timeout;
+  private command?: { id: string; controller: AbortController };
+  private commandDone?: Promise<void>;
   private runPending?: { resolve: (answer: string) => void; reject: (error: Error) => void };
   readonly ready: Promise<void>;
   constructor(store: VersionStore, version: Version, cwd: string, session: string, artifacts: string, role: string,
     event: (event: AgentEvent) => void, management: (args: Record<string, unknown>) => Promise<unknown>, failed: (worker: WorkerProcess, error: Error) => void,
-    env: NodeJS.ProcessEnv = process.env) {
+    env: NodeJS.ProcessEnv = process.env, execution: ExecutionEnvironment = { kind: 'local' }) {
     this.version = version;
+    commandExecutor(execution); // Validate the host binding before starting a worker.
     this.child = fork(join(version.runtime_path, 'src/runtime/worker.ts'), [cwd, session, artifacts, role], {
-      cwd: version.runtime_path, execArgv: ['--experimental-strip-types'], env: { ...env, SEEDA_VERSION: version.id }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      cwd: version.runtime_path, execArgv: ['--experimental-strip-types'], env: { ...env, SEEDA_VERSION: version.id, SEEDA_HOST_EXECUTION: role === 'primary' ? '1' : '0', SEEDA_EXECUTION_DESCRIPTION: execution.kind === 'local' ? `local, cwd ${cwd}` : `docker, cwd ${execution.cwd}` }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
     store.db.prepare("INSERT INTO instances(id,version_id,role,state,pid) VALUES(?,?,?,'starting',?)").run(this.id, version.id, role, this.child.pid ?? null);
     let readyResolve!: () => void; let readyReject!: (error: Error) => void; let initialized = false; let exited = false;
@@ -42,6 +46,7 @@ export class WorkerProcess {
     const deadline = setTimeout(() => terminate('Worker startup timed out'), 15_000);
     const onExit = (error: Error) => {
       if (exited) return; exited = true;
+      this.command?.controller.abort();
       for (const pid of this.groups) killGroup(pid);
       this.groups.clear(); clearTimeout(deadline); clearInterval(this.interval);
       store.db.prepare('UPDATE instances SET state=?,reason=?,ended_at=CURRENT_TIMESTAMP WHERE id=?').run(this.stopping ? 'stopped' : 'failed', this.stopping ? null : error.message, this.id);
@@ -55,12 +60,24 @@ export class WorkerProcess {
       if (message.type === 'process') { if (message.started) { if (Number.isInteger(message.pid) && message.pid > 1) this.groups.add(message.pid); } else this.groups.delete(message.pid); }
       else if (message.type === 'heartbeat') this.lastHeartbeat = performance.now();
       else if (message.type === 'ready') {
+        if (execution.kind === 'docker' && message.commandExecution !== true) { terminate('Agent version does not support host-selected execution'); return; }
         initialized = true; this.lastHeartbeat = performance.now(); clearTimeout(deadline); this.messages = message.messages; this.supportsCompact = message.compact === true;
         store.db.prepare("UPDATE instances SET state='ready' WHERE id=?").run(this.id); readyResolve();
       } else if (message.type === 'event') event(message.event);
       else if (message.type === 'result') {
         const pending = this.runPending; this.runPending = undefined; this.busy = false;
         if (message.error) pending?.reject(new Error(message.error)); else pending?.resolve(message.answer ?? '');
+      } else if (message.type === 'command_cancel') {
+        if (this.command?.id === message.id) this.command.controller.abort();
+      } else if (message.type === 'command') {
+        if (role !== 'primary' || !this.busy || this.stopping || this.command || typeof message.id !== 'string') {
+          this.send({ type: 'command_result', id: message.id, error: 'Host command execution unavailable' }); return;
+        }
+        const controller = new AbortController(); this.command = { id: message.id, controller };
+        this.commandDone = executeManagedCommand(execution, message.args, { cwd, artifactDir: artifacts, signal: controller.signal })
+          .then(result => this.send({ type: 'command_result', id: message.id, result }),
+            () => this.send({ type: 'command_result', id: message.id, error: 'Host command execution failed or parameters were invalid' }))
+          .finally(() => { this.command = undefined; });
       } else if (message.type === 'management') {
         void management(message.args).then(result => this.send({ type: 'management_result', id: message.id, result }),
           error => this.send({ type: 'management_result', id: message.id, error: error instanceof Error ? error.message : 'Management failed' }));
@@ -87,13 +104,14 @@ export class WorkerProcess {
     this.busy = true;
     return new Promise((resolve, reject) => { this.runPending = { resolve, reject }; this.send({ type: 'compact' }); });
   }
-  cancel(): void { this.send({ type: 'cancel' }); }
+  cancel(): void { this.command?.controller.abort(); this.send({ type: 'cancel' }); }
   async stop(): Promise<void> {
     this.stopping = true;
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    this.command?.controller.abort();
+    if (this.child.exitCode !== null || this.child.signalCode !== null) { await this.commandDone; return; }
     const exited = new Promise<void>(resolve => this.child.once('exit', () => resolve()));
     this.send({ type: 'stop' });
     const timer = setTimeout(() => this.child.kill('SIGKILL'), 2500);
-    await exited; clearTimeout(timer);
+    await exited; clearTimeout(timer); await this.commandDone;
   }
 }

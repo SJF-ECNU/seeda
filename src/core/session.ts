@@ -1,13 +1,13 @@
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Message, ToolCall } from './types.ts';
+import type { ExecutionFailure, Message, ToolCall } from './types.ts';
 import { RuntimeHistory, failureReason, type RuntimeObservation, type InstructionSource } from './runtime-records.ts';
 
 type RecordEntry =
   | { type: 'message'; message: Message }
   | { type: 'tool_started'; callId: string }
-  | { type: 'end'; status: string; error?: string; endedAt?: string; reason?: string; recordingComplete?: boolean }
+  | { type: 'end'; status: string; error?: string; endedAt?: string; reason?: string; recordingComplete?: boolean; failure?: ExecutionFailure }
   | { type: 'compact'; messages: Message[] }
   | { type: 'metadata'; cwd: string; createdAt: string }
   | { type: 'request'; id: string; implementationVersion: string; startedAt?: string; recordingComplete?: boolean }
@@ -48,7 +48,7 @@ export class Session {
       else if (entry.type === 'request') session.runtime.request(entry.id, entry.implementationVersion, entry.startedAt);
       else if (entry.type === 'runtime') session.runtime.observe(entry.observation);
       else if (entry.type === 'instructions') session.runtime.instructions(entry.sources);
-      else if (entry.type === 'end') session.runtime.end(entry.status, entry.reason ?? (entry.error ? failureReason(new Error(entry.error)) : undefined), entry.endedAt);
+      else if (entry.type === 'end') session.runtime.end(entry.status, entry.reason ?? (entry.error ? failureReason(new Error(entry.error)) : undefined), entry.endedAt, entry.failure);
     }
     const resolved = new Set(session.messages.filter(m => m.role === 'tool').map(m => m.tool_call_id));
     const pending: ToolCall[] = session.messages.flatMap(m => m.tool_calls ?? []).filter(call => !resolved.has(call.id));
@@ -79,10 +79,10 @@ export class Session {
   async startTool(callId: string): Promise<void> {
     await this.record({ type: 'tool_started', callId }); this.started.add(callId);
   }
-  async end(status: string, error?: string): Promise<void> {
+  async end(status: string, error?: string, failure?: ExecutionFailure): Promise<void> {
     const endedAt = new Date().toISOString(), reason = status === 'cancelled' ? 'cancelled' : error ? failureReason(new Error(error)) : undefined;
-    await this.record({ type: 'end', status, endedAt, reason, recordingComplete: this.runtime.recordingComplete, ...(error ? { error } : {}) });
-    this.runtime.end(status, reason, endedAt);
+    await this.record({ type: 'end', status, endedAt, reason, recordingComplete: this.runtime.recordingComplete, ...(error ? { error } : {}), ...(failure ? { failure } : {}) });
+    this.runtime.end(status, reason, endedAt, failure);
   }
   async observe(observation: RuntimeObservation): Promise<void> {
     const usage = observation.usage ? Object.fromEntries(['promptTokens', 'completionTokens', 'totalTokens', 'promptCacheHitTokens', 'promptCacheMissTokens'].map(key => {

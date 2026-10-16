@@ -40,11 +40,18 @@ export interface Tool {
   definition: ToolDefinition;
   execute(args: unknown, context: ToolContext): Promise<unknown>;
 }
+export interface ExecutionFailure {
+  stage: 'model' | 'tool' | 'runtime' | 'evaluation';
+  reason: string;
+  code?: string | number;
+  summary: string;
+}
 export type AgentEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_start'; call: ToolCall }
-  | { type: 'tool_end'; call: ToolCall; result: unknown }
+  | { type: 'tool_end'; call: ToolCall; result: unknown; failure?: ExecutionFailure }
+  | { type: 'feedback'; failure: ExecutionFailure }
   | { type: 'compacted' }
   | { type: 'usage'; usage: Usage; contextChars: number; maxContextChars: number; maxContextTokens?: number }
   | { type: 'retrying'; attempt: number; delayMs: number; error: string }
-  | { type: 'end'; status: 'completed' | 'failed' | 'cancelled'; error?: string };
+  | { type: 'end'; status: 'completed' | 'failed' | 'cancelled'; error?: string; failure?: ExecutionFailure };

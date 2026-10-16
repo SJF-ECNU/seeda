@@ -152,3 +152,6 @@ instances.reason 区分 `Worker heartbeat timed out`、`Worker startup timed out
 ## 前端独立更新
 
 全局命令始终使用安装目录的CLI/TUI/守护；select和promote只切换Agent worker。新保存和发布的种系排除前端与外部管理代码；旧快照兼容，不从版本目录启动其CLI。安装更新可使用仓库npm link；守护管理代码变更需seeda stop后重开。前端保持同一socket连接即可观察新主实例，无需跟随Agent更新全局入口。
+
+## 基础版本后续更新
+当前工作树已补齐结构化执行反馈、evaluate有界摘要、显式acceptReason合并接替和宿主执行接入。旧操作及隔离/回退仍保留，已有种系不会自动升级。细节与实测边界见 [[docs/基础版本最小改造与验证]]。

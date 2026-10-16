@@ -1,4 +1,5 @@
-import type { AgentEvent, Model, Tool, ToolCall } from './types.ts';
+import type { AgentEvent, ExecutionFailure, Model, Tool, ToolCall } from './types.ts';
+import { executionFailure, toolFailure } from './runtime-records.ts';
 import { Session } from './session.ts';
 import { RuntimeRecordsTool } from '../tools/runtime-records.ts';
 import { compactContext, contextSize, ContextTokens, estimateContextTokens, loadInstructions } from './context.ts';
@@ -27,12 +28,16 @@ export class Agent {
       const started = performance.now();
       try {
         const response = await original.complete(...args);
+        const failure = ['stop', 'tool_calls'].includes(response.finishReason) ? undefined : executionFailure(new Error(`Model did not complete normally (${response.finishReason})`), 'model');
         await options.session.observe({ kind: 'model', durationMs: performance.now() - started,
           status: ['stop', 'tool_calls'].includes(response.finishReason) ? 'completed' : 'failed',
-          finishReason: ['stop', 'tool_calls', 'length', 'content_filter'].includes(response.finishReason) ? response.finishReason : 'other', usage: response.usage });
+          finishReason: ['stop', 'tool_calls', 'length', 'content_filter'].includes(response.finishReason) ? response.finishReason : 'other', usage: response.usage, ...(failure ? { failure } : {}) });
+        if (failure) { try { options.onEvent?.({ type: 'feedback', failure }); } catch {} }
         return response;
       } catch (error) {
-        await options.session.observe({ kind: 'model', durationMs: performance.now() - started, status: args[2].aborted ? 'cancelled' : 'failed' });
+        const failure = executionFailure(error, 'model', args[2].aborted);
+        await options.session.observe({ kind: 'model', durationMs: performance.now() - started, status: args[2].aborted ? 'cancelled' : 'failed', failure });
+        try { options.onEvent?.({ type: 'feedback', failure }); } catch {}
         throw error;
       }
     } };
@@ -54,8 +59,9 @@ export class Agent {
       emit({ type: 'end', status: 'completed' });
       return changed ? '上下文已压缩，原始对话记录已保留。' : '当前没有可压缩的早期对话。';
     } catch (error) {
-      await this.options.session.end(controller.signal.aborted ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Compaction failed');
-      emit({ type: 'end', status: controller.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Compaction failed' });
+      const failure = this.options.session.runtime.recent(1)[0]?.recentCalls.at(-1)?.failure ?? executionFailure(error, 'runtime', controller.signal.aborted);
+      await this.options.session.end(controller.signal.aborted ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Compaction failed', failure);
+      emit({ type: 'end', status: controller.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Compaction failed', failure });
       throw error;
     } finally { this.controller = undefined; }
   }
@@ -63,6 +69,7 @@ export class Agent {
     if (this.controller) throw new Error('An agent request is already running');
     const controller = new AbortController(); this.controller = controller;
     const { model, session, cwd, tools } = this.options;
+    let stage: ExecutionFailure['stage'] = 'runtime';
     const emit = (event: AgentEvent) => {
       // A frontend observer must not change the execution or persistence outcome.
       try { this.options.onEvent?.(event); } catch { /* The caller owns frontend recovery. */ }
@@ -77,6 +84,7 @@ export class Agent {
       const system = instructions.text + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '');
       while (true) {
         controller.signal.throwIfAborted();
+        stage = 'model';
         if (await compactContext(session, model, system, this.inputBudget, controller.signal, false, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens, this.compactThreshold)) { this.tokens.reset(); emit({ type: 'compacted' }); }
         const response = await model.complete([{ role: 'system', content: system }, ...session.getContext()],
           tools.map(tool => tool.definition), controller.signal, text => emit({ type: 'text', text }));
@@ -93,6 +101,7 @@ export class Agent {
           if (!call.id || !call.function.name || ids.has(call.id)) throw new Error('Invalid or duplicate tool call ID');
           ids.add(call.id);
         }
+        stage = 'runtime';
         await session.add(response.message);
         if (!calls.length) {
           await session.end('completed'); emit({ type: 'end', status: 'completed' });
@@ -105,36 +114,41 @@ export class Agent {
           }
           emit({ type: 'tool_start', call });
           const started = performance.now();
-          const result = await this.execute(call, controller.signal);
+          stage = 'tool';
+          const executed = await this.execute(call, controller.signal);
+          const result = executed.result;
           const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
-          const failed = record.status === 'failed' || record.status === 'unknown' || (typeof record.exit_code === 'number' && record.exit_code !== 0);
+          const failure = executed.failure ?? toolFailure(record, controller.signal.aborted);
           await session.observe({ kind: 'tool', tool: tools.some(tool => tool.definition.function.name === call.function.name) ? call.function.name : 'unknown',
-            durationMs: performance.now() - started, status: controller.signal.aborted || record.status === 'cancelled' ? 'cancelled' : record.status === 'timed_out' ? 'timed_out' : failed ? 'failed' : 'completed',
+            durationMs: performance.now() - started, status: controller.signal.aborted || record.status === 'cancelled' ? 'cancelled' : record.status === 'timed_out' ? 'timed_out' : failure ? 'failed' : 'completed',
+            ...(failure ? { failure } : {}),
             ...(typeof record.exit_code === 'number' || record.exit_code === null ? { exitCode: record.exit_code } : {}),
             ...(typeof record.truncated === 'boolean' ? { truncated: record.truncated } : {}) });
           await session.add({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
-          emit({ type: 'tool_end', call, result });
+          emit({ type: 'tool_end', call, result, ...(failure ? { failure } : {}) });
+          stage = 'runtime';
         }
         controller.signal.throwIfAborted();
       }
     } catch (error) {
       const status = controller.signal.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : 'Agent request failed';
-      await session.end(status, message);
-      emit({ type: 'end', status, error: message });
+      const failure = executionFailure(error, stage, controller.signal.aborted);
+      await session.end(status, message, failure);
+      emit({ type: 'end', status, error: message, failure });
       throw error;
     } finally { this.controller = undefined; }
   }
-  private async execute(call: ToolCall, signal: AbortSignal): Promise<unknown> {
+  private async execute(call: ToolCall, signal: AbortSignal): Promise<{ result: unknown; failure?: ExecutionFailure }> {
     try {
       const tool = this.options.tools.find(tool => tool.definition.function.name === call.function.name);
       if (!tool) throw new Error(`Unknown tool: ${call.function.name}`);
       const args: unknown = JSON.parse(call.function.arguments);
       // Persist intent before any tool can create a side effect.
       await this.options.session.startTool(call.id);
-      return await tool.execute(args, { cwd: this.options.cwd, artifactDir: this.options.artifactDir, signal });
+      return { result: await tool.execute(args, { cwd: this.options.cwd, artifactDir: this.options.artifactDir, signal }) };
     } catch (error) {
-      return { status: signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Tool failed' };
+      return { result: { status: signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Tool failed' }, failure: executionFailure(error, 'tool', signal.aborted) };
     }
   }
 }
