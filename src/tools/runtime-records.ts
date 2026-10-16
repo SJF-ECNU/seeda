@@ -6,7 +6,7 @@ import type { Tool } from '../core/types.ts';
 export class RuntimeRecordsTool implements Tool {
   readonly definition = { type: 'function' as const, function: {
     name: 'runtime_records',
-    description: 'Read your own current-session runtime facts: recent task endings, model requests and reported token usage, tool failures and durations, implementation directory and available tools. Read-only; no commands, outputs, credentials or diagnosis. Missing old measurements are unknown. Model calls count the Agent interface, not provider-internal retries.',
+    description: 'Read your own current-session runtime facts: recent task endings, model requests and reported token usage, tool failures and durations, actual instruction source paths and lengths, implementation directory and available tools. Read-only; no instruction bodies, commands, outputs, credentials or diagnosis. Missing old measurements are unknown. Model calls count the Agent interface, not provider-internal retries.',
     parameters: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Recent tasks, default 5; each includes at most 20 recent calls.' } }, additionalProperties: false },
   } };
   private session: Session;

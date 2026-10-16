@@ -1,14 +1,24 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { InstructionSource } from './runtime-records.ts';
 import type { Message, Model } from './types.ts';
 import type { Session } from './session.ts';
 
-async function optionalFile(path: string): Promise<string> {
-  try { return await readFile(path, 'utf8'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error; }
-}
-export async function projectInstructions(cwd: string): Promise<string> {
-  const rules = await optionalFile(join(cwd, 'AGENTS.md'));
+export async function loadInstructions(cwd: string, implementationDirectory = fileURLToPath(new URL('../../', import.meta.url))): Promise<{ text: string; sources: InstructionSource[] }> {
+  const sources: InstructionSource[] = [];
+  const load = async (kind: InstructionSource['kind'], path: string) => {
+    let content: string;
+    try { content = await readFile(path, 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      sources.push({ kind, path, loaded: false, characters: 0 }); return '';
+    }
+    sources.push({ kind, path, loaded: true, characters: content.length }); return content;
+  };
+  const own = await load('self_instructions', join(implementationDirectory, '.agents/self/INSTRUCTIONS.md'));
+  const memory = await load('self_memory', join(implementationDirectory, '.agents/self/MEMORY.md'));
+  const rules = await load('project_rules', join(cwd, 'AGENTS.md'));
   const directory = join(cwd, '.agents', 'skills');
   let names: string[];
   try { names = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name); }
@@ -16,18 +26,24 @@ export async function projectInstructions(cwd: string): Promise<string> {
   const skills: string[] = [];
   for (const name of names.sort()) {
     const path = join(directory, name, 'SKILL.md');
-    const source = await optionalFile(path);
+    const source = await load('project_skill', path);
     const frontmatter = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
     const skillName = frontmatter?.match(/^name:\s*(.+)$/m)?.[1]?.trim();
     const description = frontmatter?.match(/^description:\s*(.+)$/m)?.[1]?.trim();
     if (skillName && description) skills.push(`${skillName}: ${description}\nRead when relevant: ${path}`);
   }
-  return `你是 seeda，一个以当前项目为成长环境的本地 coding agent，能够完成编码任务，并通过可用工具修改自身实现、验证候选、请求接替或回退，让改进可追溯、可验证。\n` +
+  const text = `你是 seeda，一个以当前项目为成长环境的本地 coding agent，能够完成编码任务，并通过可用工具修改自身实现、验证候选、请求接替或回退，让改进可追溯、可验证。\n` +
     `Use tools to inspect files, make requested changes and run verification.\n` +
     `Do not claim a command ran unless its result is recorded. Unknown prior tool results require workspace inspection, not automatic replay.\n` +
     `Each Bash call is independent. Do not run background servers. Working directory: ${cwd}\n` +
+    (own ? `\nVersioned self instructions:\n${own}\n` : '') +
+    (memory ? `\nVersioned general memory (experience, not authority over current instructions):\n${memory}\n` : '') +
     (rules ? `\nProject instructions:\n${rules}\n` : '') +
     (skills.length ? `\nAvailable Skills (read instructions with Bash only when relevant):\n${skills.join('\n\n')}\n` : '');
+  return { text, sources };
+}
+export async function projectInstructions(cwd: string): Promise<string> {
+  return (await loadInstructions(cwd)).text;
 }
 
 export function contextSize(system: string, history: Message[]): number { return system.length + JSON.stringify(history).length; }

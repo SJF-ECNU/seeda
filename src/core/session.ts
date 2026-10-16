@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Message, ToolCall } from './types.ts';
-import { RuntimeHistory, failureReason, type RuntimeObservation } from './runtime-records.ts';
+import { RuntimeHistory, failureReason, type RuntimeObservation, type InstructionSource } from './runtime-records.ts';
 
 type RecordEntry =
   | { type: 'message'; message: Message }
@@ -11,7 +11,8 @@ type RecordEntry =
   | { type: 'compact'; messages: Message[] }
   | { type: 'metadata'; cwd: string; createdAt: string }
   | { type: 'request'; id: string; implementationVersion: string; startedAt?: string; recordingComplete?: boolean }
-  | { type: 'runtime'; observation: RuntimeObservation };
+  | { type: 'runtime'; observation: RuntimeObservation }
+  | { type: 'instructions'; sources: InstructionSource[] };
 
 export class Session {
   readonly path: string;
@@ -46,6 +47,7 @@ export class Session {
       else if (entry.type === 'tool_started') session.started.add(entry.callId);
       else if (entry.type === 'request') session.runtime.request(entry.id, entry.implementationVersion, entry.startedAt);
       else if (entry.type === 'runtime') session.runtime.observe(entry.observation);
+      else if (entry.type === 'instructions') session.runtime.instructions(entry.sources);
       else if (entry.type === 'end') session.runtime.end(entry.status, entry.reason ?? (entry.error ? failureReason(new Error(entry.error)) : undefined), entry.endedAt);
     }
     const resolved = new Set(session.messages.filter(m => m.role === 'tool').map(m => m.tool_call_id));
@@ -65,6 +67,10 @@ export class Session {
     const id = randomUUID(), implementationVersion = process.env.SEEDA_VERSION ?? '0.1.0', startedAt = new Date().toISOString();
     await this.record({ type: 'request', id, implementationVersion, startedAt, recordingComplete: this.runtime.recordingComplete });
     this.runtime.request(id, implementationVersion, startedAt, true);
+  }
+  async recordInstructions(sources: InstructionSource[]): Promise<void> {
+    await this.record({ type: 'instructions', sources });
+    this.runtime.instructions(sources);
   }
   async add(message: Message): Promise<void> {
     await this.record({ type: 'message', message });

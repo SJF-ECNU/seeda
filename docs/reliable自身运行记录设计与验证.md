@@ -18,6 +18,10 @@ updated_at: 2026-10-14
 
 计量写入失败不改变原有执行结果，`recordingComplete=false`说明记录有缺口，并通过后续成功写入的request/end保留此状态。原始会话必要写入仍遵循原来的失败行为；不承诺磁盘失效下继续可靠执行。
 
+## 指令来源记录
+
+当前源码还会在每次请求及压缩记录实际读取的自身指令、通用记忆、项目规则和Skill来源，runtime_records的run.instructions可查询路径、loaded和源文件字符数，不包含正文。旧会话没有该字段表示未知；既有已发布种系不会自动升级。详见 [[docs/自身指令与项目规则]]。
+
 ## 使用
 
 新种系名称：`seeda-agent-reliable-runtime-records`。

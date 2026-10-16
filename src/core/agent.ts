@@ -1,7 +1,7 @@
 import type { AgentEvent, Model, Tool, ToolCall } from './types.ts';
 import { Session } from './session.ts';
 import { RuntimeRecordsTool } from '../tools/runtime-records.ts';
-import { compactContext, contextSize, ContextTokens, estimateContextTokens, projectInstructions } from './context.ts';
+import { compactContext, contextSize, ContextTokens, estimateContextTokens, loadInstructions } from './context.ts';
 
 export interface AgentOptions {
   cwd: string;
@@ -45,8 +45,10 @@ export class Agent {
     const emit = (event: AgentEvent) => { try { this.options.onEvent?.(event); } catch {} };
     try {
       await this.options.session.beginRequest();
+      const instructions = await loadInstructions(this.options.cwd);
+      await this.options.session.recordInstructions(instructions.sources);
       const changed = await compactContext(this.options.session, this.options.model,
-        await projectInstructions(this.options.cwd), this.inputBudget, controller.signal, true, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens);
+        instructions.text, this.inputBudget, controller.signal, true, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens);
       if (changed) { this.tokens.reset(); emit({ type: 'compacted' }); }
       await this.options.session.end('completed');
       emit({ type: 'end', status: 'completed' });
@@ -68,9 +70,11 @@ export class Agent {
     try {
       if (!input.trim()) throw new Error('User input cannot be empty');
       await session.beginRequest();
+      const instructions = await loadInstructions(cwd);
+      await session.recordInstructions(instructions.sources);
       await session.add({ role: 'user', content: input });
       const previous = session.runtime.recent(2).at(-2);
-      const system = await projectInstructions(cwd) + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '');
+      const system = instructions.text + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '');
       while (true) {
         controller.signal.throwIfAborted();
         if (await compactContext(session, model, system, this.inputBudget, controller.signal, false, this.options.maxContextChars ? undefined : this.tokens.estimate, this.options.maxContextChars ? undefined : estimateContextTokens, this.compactThreshold)) { this.tokens.reset(); emit({ type: 'compacted' }); }

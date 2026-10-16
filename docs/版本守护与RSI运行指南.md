@@ -46,6 +46,8 @@ TUI 中 `/versions` 查看版本，`/use 完整版本ID` 选择版本，`/rollba
 
 首次导入只包含实现代码、测试、脚本、Skill、AGENTS.md、README、package/锁文件和 tsconfig，不导入 `.env`、用户 session 或运行产物。候选提交同样采用这些路径，普通用户项目改动不进入引擎版本库。
 
+自身指令和通用记忆随版本的 `.agents/self/INSTRUCTIONS.md`、`.agents/self/MEMORY.md` 加载，项目规则仍取自任务cwd，切换不覆盖项目AGENTS.md。文件缺失、候选隔离及真实加载记录见 [[docs/自身指令与项目规则]]。
+
 每个版本保存 Git commit 和保留引用，使用独立 detached worktree；依赖通过 `npm ci --ignore-scripts` 安装到自己的目录。切换已保留版本无需重新安装。需要依赖安装脚本的未来改动不在当前自动安装范围内。
 
 SQLite 保存 versions、drafts、evaluations、instances、runtime_state、switches。版本父关系与当前/previous 指针可查询，验证失败、取消、拒绝和中断均保留。数据库由守护写入，Agent 通过管理工具请求操作。启动期间用现有 SQLite 写事务串行建立 socket 所有权，同时启动的第二管理进程被拒绝。

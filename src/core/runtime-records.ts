@@ -1,5 +1,11 @@
 import type { Usage } from './types.ts';
 
+export interface InstructionSource {
+  kind: 'self_instructions' | 'self_memory' | 'project_rules' | 'project_skill';
+  path: string;
+  loaded: boolean;
+  characters: number;
+}
 export interface RuntimeObservation {
   kind: 'model' | 'tool';
   durationMs: number;
@@ -13,6 +19,7 @@ export interface RuntimeObservation {
 export interface RuntimeRun {
   id: string;
   implementationVersion: string;
+  instructions?: InstructionSource[];
   startedAt?: string;
   endedAt?: string;
   durationMs?: number;
@@ -63,6 +70,9 @@ export class RuntimeHistory {
       if (observation.status !== 'completed') run.toolFailures++;
     }
     run.recentCalls.push(observation); run.recentCalls = run.recentCalls.slice(-20);
+  }
+  instructions(sources: InstructionSource[]): void {
+    const run = this.runs.at(-1); if (run) run.instructions = structuredClone(sources);
   }
   end(status: string, reason?: string, endedAt?: string): void {
     const run = this.runs.at(-1); if (!run) return;
