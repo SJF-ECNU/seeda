@@ -17,25 +17,59 @@ function call(id: string, name: string, args: unknown): ModelResponse {
   return { message: { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finishReason: 'tool_calls' };
 }
 
-test('length failure becomes visible on the next request and can be queried after reload', async t => {
-  const w = await workspace(t);
-  await assert.rejects(new Agent({ ...w, tools: [], model: { async complete() { return { ...done(), finishReason: 'length', usage: { promptTokens: 12, completionTokens: 9, totalTokens: 21, promptCacheHitTokens: 0, promptCacheMissTokens: 12 } }; } } }).run('first'), /length/);
-  const loaded = await Session.open(w.session.path, w.cwd);
-  let step = 0;
+test('length feedback is readable in the same run; the whole truncated batch stays unexecuted', async t => {
+  const w = await workspace(t); let step = 0;
+  const usage = { promptTokens: 12, completionTokens: 9, totalTokens: 21, promptCacheHitTokens: 0, promptCacheMissTokens: 12 };
   const model: Model = { async complete(messages, tools) {
-    assert.match(messages[0].content!, /Previous request ended: failed \(model_length\)/);
     assert.ok(tools.some(tool => tool.function.name === 'runtime_records'));
-    if (!step++) return call('inspect', 'runtime_records', {});
-    const report = JSON.parse(messages.at(-1)!.content!);
-    assert.equal(report.runs[0].reason, 'model_length');
-    assert.equal(report.runs[0].usage.totalTokens, 21);
-    assert.equal(report.runs[0].status, 'failed');
-    assert.equal(report.runs[0].modelCalls, 1);
-    assert.ok(report.runs[0].durationMs >= 0);
-    assert.equal(report.scope, 'current_session');
-    return done();
+    switch (step++) {
+      case 0: {
+        const cut = call('cut-valid', 'bash', { command: 'touch forbidden' });
+        cut.message.tool_calls!.push({ id: 'cut-partial', type: 'function', function: { name: 'bash', arguments: '{"command":' } });
+        return { ...cut, finishReason: 'length', usage };
+      }
+      case 1:
+        assert.match(messages.at(-1)!.content!, /Runtime feedback: model_length/);
+        assert.equal(messages.at(-1)!.role, 'system');
+        assert.equal(messages.findLast(m => m.role === 'user')!.content, 'original task');
+        assert.ok(!messages.some(m => m.tool_calls?.some(c => c.id.startsWith('cut-'))));
+        return call('inspect', 'runtime_records', {});
+      case 2: {
+        const report = JSON.parse(messages.at(-1)!.content!);
+        assert.equal(report.scope, 'current_session');
+        const failure = report.runs[0].recentCalls.find((c: any) => c.failure?.reason === 'model_length');
+        assert.equal(failure.usage.completionTokens, 9);
+        assert.equal(report.runs[0].usage.totalTokens, 21);
+        return call('adjust', 'bash', { command: 'test ! -e forbidden && printf adjusted > proof' });
+      }
+      default: return done();
+    }
   } };
-  await new Agent({ ...w, session: loaded, tools: [], model }).run('continue');
+  await new Agent({ ...w, tools: [new BashTool()], model }).run('original task');
+  assert.equal(await readFile(join(w.cwd, 'proof'), 'utf8'), 'adjusted');
+  await assert.rejects(readFile(join(w.cwd, 'forbidden')), { code: 'ENOENT' });
+  const restored = await Session.open(w.session.path, w.cwd);
+  const report = await new RuntimeRecordsTool(restored, ['bash']).execute({}) as any;
+  assert.equal(report.runs.length, 1);
+  assert.equal(report.runs[0].status, 'completed');
+  assert.equal(report.runs[0].modelCalls, 4);
+  assert.equal(report.runs[0].toolCalls, 2);
+  assert.ok(report.runs[0].recentCalls.some((c: any) => c.failure?.reason === 'model_length'));
+  assert.ok(!(await readFile(w.session.path, 'utf8')).includes('cut-valid'));
+});
+
+test('cancel on length feedback prevents another request and never executes its tools', async t => {
+  const w = await workspace(t); let calls = 0;
+  const agent = new Agent({ ...w, tools: [new BashTool()], onEvent(event) {
+    if (event.type === 'feedback' && event.failure.reason === 'model_length') agent.cancel();
+  }, model: { async complete() {
+    calls++;
+    return { ...call('cut', 'bash', { command: 'touch forbidden' }), finishReason: 'length', usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, promptCacheHitTokens: 0, promptCacheMissTokens: 1 } };
+  } } });
+  await assert.rejects(agent.run('cancel'));
+  assert.equal(calls, 1);
+  assert.equal(w.session.runtime.recent()[0].status, 'cancelled');
+  await assert.rejects(readFile(join(w.cwd, 'forbidden')), { code: 'ENOENT' });
 });
 
 test('actual nonzero exit and Bash timeout are counted without copying arguments or output', async t => {

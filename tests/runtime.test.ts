@@ -13,14 +13,14 @@ async function until(check: () => boolean, ms = 12000): Promise<void> {
   const started = Date.now();
   while (!check()) { if (Date.now() - started > ms) throw new Error('Condition did not become true'); await new Promise(r => setTimeout(r, 50)); }
 }
-test('managed runtime retains versions, isolates candidate, drains requests, restores faults and survives restart', { timeout: 90000 }, async t => {
+test('managed runtime retains versions, isolates candidate, drains requests, restores faults and survives restart', { timeout: 180000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'seeda-rt-')); const cwd = join(root, 'project');
   const { mkdir } = await import('node:fs/promises'); await mkdir(cwd);
   const server = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const messages = JSON.parse(body).messages;
     const user = messages.filter((m: {role:string}) => m.role === 'user').at(-1).content;
-    const toolDone = messages.at(-1).role === 'tool';
+    const toolDone = messages.at(-1).role === 'tool' || (user === 'block' && messages.some((m: {role:string;content?:string}) => m.role === 'tool' && m.content?.includes('unknown')));
     if (user === 'fail-task') { res.statusCode = 500; res.end('private-body'); return; }
     if (user === 'slow' || user === 'candidate-task') await new Promise(r => setTimeout(r, 400));
     let delta: unknown = { content: user === 'slow' ? 'finished slow' : 'done' }; let finish = 'stop';
@@ -96,13 +96,17 @@ test('managed runtime retains versions, isolates candidate, drains requests, res
   await assert.rejects(supervisor.manage({ operation: 'decide', evaluation: failedEvaluation.evaluation, decision: 'accept', reason: 'unsupported acceptance' }), /incomplete/);
   await supervisor.manage({ operation: 'decide', evaluation: failedEvaluation.evaluation, decision: 'reject', reason: 'Model request failed; no completed verification' });
   const cancellation = supervisor.manage({ operation: 'evaluate', version: b.id, task: 'block', sandbox: 'container' });
+  let cancellationResult: unknown; void cancellation.then(value => { cancellationResult = value; });
   let candidatePid = '';
-  for (let i = 0; i < 500 && !candidatePid; i++) {
+  // Container dependency preparation shares the native 120s evaluation deadline.
+  // A separate 15s test wait could abort a still-valid initialization.
+  const preparationDeadline = Date.now() + 120_000;
+  while (!candidatePid && !cancellationResult && Date.now() < preparationDeadline) {
     const latest = store.db.prepare("SELECT evidence_path FROM evaluations WHERE status='running'").get() as { evidence_path: string } | undefined;
     if (latest) { try { candidatePid = await readFile(join(latest.evidence_path, '../sandbox/workspace/block.pid'), 'utf8'); } catch {} }
     if (!candidatePid) await new Promise(r => setTimeout(r, 30));
   }
-  assert.ok(candidatePid); supervisor.cancel();
+  assert.ok(candidatePid, JSON.stringify(cancellationResult ?? { status: 'still_running', evaluations: store.db.prepare("SELECT status,evidence_path FROM evaluations").all() })); supervisor.cancel();
   assert.equal((await cancellation as { status: string }).status, 'cancelled');
   await supervisor.manage({ operation: 'decide', evaluation: evaluation.evaluation, decision: 'accept', reason: 'B completes isolated task' });
   const events: AgentEvent[] = []; const running = supervisor.run('slow', event => events.push(event));
@@ -115,14 +119,14 @@ test('managed runtime retains versions, isolates candidate, drains requests, res
   await assert.rejects(supervisor.manage({ operation: 'draft' }, a.id), /Stale/);
   const primary = store.db.prepare("SELECT pid FROM instances WHERE role='primary' AND ended_at IS NULL").get() as { pid: number };
   process.kill(primary.pid, 'SIGKILL');
-  await until(() => store.state().current_version === a.id && store.state().phase === 'running');
+  await until(() => store.state().current_version === b.id && store.state().phase === 'running' && Number(store.db.prepare("SELECT pid FROM instances WHERE role='primary' AND ended_at IS NULL").get()?.pid) !== primary.pid);
   assert.equal(await client.run('after fault'), 'done');
   // A target that crashes before ready never takes ownership of the main session.
-  const brokenDraft = await store.draft(a.id);
+  const brokenDraft = await store.draft(b.id);
   await writeFile(join(brokenDraft.path, 'src/runtime/worker.ts'), 'process.exit(7);\n');
   const broken = await store.submit(brokenDraft.id, 'simulate startup failure');
   const brokenSelection = await supervisor.select(broken.id) as { status: string };
-  assert.equal(brokenSelection.status, 'failed'); assert.equal(store.state().current_version, a.id);
+  assert.equal(brokenSelection.status, 'failed'); assert.equal(store.state().current_version, b.id);
   assert.equal(await client.run('still alive'), 'done');
   await client.request('resume', { id: created.id });
   await supervisor.select(b.id); assert.equal(supervisor.sessionId(), created.id);
@@ -137,21 +141,21 @@ test('managed runtime retains versions, isolates candidate, drains requests, res
   assert.equal(supervisor.sessionId(), created.id);
   assert.equal(await reconnect.run('reopened'), 'done');
   await reconnect.request('resume', { id: 'main' }); reconnect.close();
-  // A live process with a stopped event loop misses heartbeat and falls back.
+  // A stopped event loop misses heartbeat and restarts the same version first.
   await supervisor.select(b.id);
   const blocked = store.db.prepare("SELECT pid FROM instances WHERE role='primary' AND ended_at IS NULL").get() as { pid: number };
   process.kill(blocked.pid, 'SIGSTOP');
-  await until(() => store.state().current_version === a.id && store.state().phase === 'running');
+  await until(() => store.state().current_version === b.id && store.state().phase === 'running' && Number(store.db.prepare("SELECT pid FROM instances WHERE role='primary' AND ended_at IS NULL").get()?.pid) !== blocked.pid);
   assert.equal(store.versions().length, 3);
   // Kill a worker during a detached Bash command: the manager cleans its process group and never replays it.
-  const interrupted = supervisor.run('block', () => {}); const rejected = assert.rejects(interrupted, /Worker exited/);
+  const interrupted = supervisor.run('block', () => {});
   let bashPid = 0;
   for (let i = 0; i < 100 && !bashPid; i++) {
     try { bashPid = Number(await readFile(join(cwd, 'block.pid'), 'utf8')); } catch { await new Promise(r => setTimeout(r, 30)); }
   }
   assert.ok(bashPid);
   const active = store.db.prepare("SELECT pid FROM instances WHERE role='primary' AND ended_at IS NULL").get() as { pid: number };
-  process.kill(active.pid, 'SIGKILL'); await rejected;
+  process.kill(active.pid, 'SIGKILL'); assert.equal(await interrupted, 'done');
   await until(() => store.state().phase === 'running');
   await until(() => { try { process.kill(bashPid, 0); return false; } catch { return true; } });
   const main = (await readFile(join(root, 'state/sessions/main.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));

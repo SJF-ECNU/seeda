@@ -59,7 +59,7 @@ process.on('message', (message: ManagerMessage) => {
     if (message.error) request?.reject(new Error(message.error)); else request?.resolve(message.result);
   } else if (message.type === 'run' || message.type === 'compact') {
     if (active) { send({ type: 'result', error: 'Worker is busy' }); return; }
-    active = (message.type === 'compact' ? agent.compact() : agent.run(message.input)).then(answer => send({ type: 'result', answer }), error => send({ type: 'result', error: error instanceof Error ? error.message : 'Request failed' })).finally(() => { active = undefined; });
+    active = (message.type === 'compact' ? agent.compact() : agent.run(message.input, message.resume)).then(answer => send({ type: 'result', answer }), error => send({ type: 'result', error: error instanceof Error ? error.message : 'Request failed' })).finally(() => { active = undefined; });
   }
 });
-send({ type: 'ready', messages: session.messages, compact: true, commandExecution: true });
+send({ type: 'ready', messages: session.messages, compact: true, commandExecution: true, resume: true });

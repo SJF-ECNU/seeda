@@ -65,7 +65,7 @@ export class Agent {
       throw error;
     } finally { this.controller = undefined; }
   }
-  async run(input: string): Promise<string> {
+  async run(input: string, resume?: { userCountBefore: number }): Promise<string> {
     if (this.controller) throw new Error('An agent request is already running');
     const controller = new AbortController(); this.controller = controller;
     const { model, session, cwd, tools } = this.options;
@@ -79,7 +79,7 @@ export class Agent {
       await session.beginRequest();
       const instructions = await loadInstructions(cwd);
       await session.recordInstructions(instructions.sources);
-      await session.add({ role: 'user', content: input });
+      if (!resume || session.messages.filter(message => message.role === 'user').length <= resume.userCountBefore) await session.add({ role: 'user', content: input });
       const previous = session.runtime.recent(2).at(-2);
       const system = instructions.text + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '');
       while (true) {
@@ -91,6 +91,12 @@ export class Agent {
         controller.signal.throwIfAborted();
         if (response.usage) emit({ type: 'usage', usage: response.usage, contextChars: contextSize(system, session.getContext()), maxContextChars: this.options.maxContextChars ?? 0, maxContextTokens: this.options.maxContextChars ? undefined : this.contextLimit });
         if (response.usage) this.tokens.record(system, session.getContext(), response.usage.promptTokens);
+        if (response.finishReason === 'length' && response.usage && session.runtime.recordingComplete) {
+          // Never persist or execute a truncated batch, even when some calls look complete.
+          // A system fact keeps the original user task intact during context compaction.
+          await session.add({ role: 'system', content: `Runtime feedback: model_length. The last response reached its output limit (reported output tokens: ${response.usage.completionTokens}). Its content and tool calls were discarded; none of those calls were executed. runtime_records can inspect this session's failure and usage. Continue the current task within the remaining budget and unchanged permissions.` });
+          continue;
+        }
         const calls = response.message.tool_calls ?? [];
         if ((response.finishReason !== 'stop' && response.finishReason !== 'tool_calls') ||
           (calls.length > 0 && response.finishReason !== 'tool_calls') ||

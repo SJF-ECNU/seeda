@@ -4,6 +4,16 @@ import { randomUUID } from 'node:crypto';
 import type { ExecutionFailure, Message, ToolCall } from './types.ts';
 import { RuntimeHistory, failureReason, type RuntimeObservation, type InstructionSource } from './runtime-records.ts';
 
+export interface RecoveryRecord {
+  at: string;
+  instance: string;
+  failedVersion: string;
+  targetVersion: string | null;
+  reason: string;
+  attempt: number;
+  logPath: string;
+}
+
 type RecordEntry =
   | { type: 'message'; message: Message }
   | { type: 'tool_started'; callId: string }
@@ -12,12 +22,14 @@ type RecordEntry =
   | { type: 'metadata'; cwd: string; createdAt: string }
   | { type: 'request'; id: string; implementationVersion: string; startedAt?: string; recordingComplete?: boolean }
   | { type: 'runtime'; observation: RuntimeObservation }
-  | { type: 'instructions'; sources: InstructionSource[] };
+  | { type: 'instructions'; sources: InstructionSource[] }
+  | { type: 'recovery'; recovery: RecoveryRecord };
 
 export class Session {
   readonly path: string;
   readonly messages: Message[] = [];
   readonly runtime = new RuntimeHistory();
+  readonly recoveries: RecoveryRecord[] = [];
   private context: Message[] = [];
   private readonly started = new Set<string>();
   private constructor(path: string) { this.path = path; }
@@ -47,6 +59,7 @@ export class Session {
       else if (entry.type === 'tool_started') session.started.add(entry.callId);
       else if (entry.type === 'request') session.runtime.request(entry.id, entry.implementationVersion, entry.startedAt);
       else if (entry.type === 'runtime') session.runtime.observe(entry.observation);
+      else if (entry.type === 'recovery') session.recoveries.push(entry.recovery);
       else if (entry.type === 'instructions') session.runtime.instructions(entry.sources);
       else if (entry.type === 'end') session.runtime.end(entry.status, entry.reason ?? (entry.error ? failureReason(new Error(entry.error)) : undefined), entry.endedAt, entry.failure);
     }
@@ -67,6 +80,9 @@ export class Session {
     const id = randomUUID(), implementationVersion = process.env.SEEDA_VERSION ?? '0.1.0', startedAt = new Date().toISOString();
     await this.record({ type: 'request', id, implementationVersion, startedAt, recordingComplete: this.runtime.recordingComplete });
     this.runtime.request(id, implementationVersion, startedAt, true);
+  }
+  async recordRecovery(recovery: RecoveryRecord): Promise<void> {
+    await this.record({ type: 'recovery', recovery }); this.recoveries.push(recovery);
   }
   async recordInstructions(sources: InstructionSource[]): Promise<void> {
     await this.record({ type: 'instructions', sources });

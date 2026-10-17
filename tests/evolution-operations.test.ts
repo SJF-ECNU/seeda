@@ -82,7 +82,9 @@ test('native evolution preserves explicit acceptance while reducing management r
   await assert.rejects(supervisor.manage({ operation: 'promote', version: merged.id, evaluation: evaluation.evaluation, reason: 'stale', acceptReason: 'stale' }, initial.id), /Stale/);
   const failed = await supervisor.manage({ operation: 'evaluate', version: merged.id, task: 'truncated-candidate', sandbox: 'process' }) as Evaluation;
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.summary.model_calls, 1); assert.equal(failed.summary.usage.totalTokens, 5);
+  // Repeated truncation may recover, but the existing native broker budget still ends it.
+  assert.equal(failed.summary.model_calls, 64); assert.equal(failed.summary.usage.totalTokens, 320);
+  assert.equal(requests.filter(task => task === 'truncated-candidate').length, 64);
   await assert.rejects(supervisor.manage({ operation: 'promote', version: merged.id, evaluation: failed.evaluation, reason: 'must fail', acceptReason: 'cannot accept incomplete' }), /acceptance/);
   assert.equal(store.evaluation(failed.evaluation).decision, null);
   const slowEvaluation = supervisor.manage({ operation: 'evaluate', version: merged.id, task: 'slow-candidate', sandbox: 'process' });

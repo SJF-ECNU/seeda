@@ -126,7 +126,7 @@ export class VersionStore {
   finishSwitch(id: string, success: boolean): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      if (success) this.db.prepare("UPDATE runtime_state SET previous_version=current_version,current_version=switch_target,switch_target=NULL,phase='running' WHERE id=1").run();
+      if (success) this.db.prepare("UPDATE runtime_state SET previous_version=CASE WHEN current_version=switch_target THEN previous_version ELSE current_version END,current_version=switch_target,switch_target=NULL,phase='running' WHERE id=1").run();
       else this.db.prepare("UPDATE runtime_state SET switch_target=NULL,phase='running' WHERE id=1").run();
       this.db.prepare('UPDATE switches SET state=?,completed_at=CURRENT_TIMESTAMP WHERE id=?').run(success ? 'completed' : 'failed', id); this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
