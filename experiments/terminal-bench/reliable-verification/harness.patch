@@ -1,0 +1,39 @@
+--- a/runner.py
++++ b/runner.py
+@@ -27 +27,3 @@
+- return {key:feedback.get(key) for key in ['valid','status','reward','invalid_reason','failure_kind','summary','wall_seconds']}
++ result={key:feedback.get(key) for key in ['valid','status','reward','invalid_reason','failure_kind','summary','wall_seconds']}
++ result['diagnosis']={'source':'official_summary','specific_cause':'unknown','hidden_details_disclosed':False}
++ return result
+@@ -155,0 +158,5 @@
++   # Deploy extensions from the exact tested version, equally for development and heldout arms.
++   skills=Path(version['runtime_path'] if version else source)/'.agents/skills'
++   if skills.is_dir():
++    cmd(['docker','cp',str(skills),cid+':/tmp/seeda-agent-skills'])
++    prompt+='\n当前版本的可选技能位于 /tmp/seeda-agent-skills/；通过 Bash 读取相关 SKILL.md 后使用。其自查结果不等于官方评分。'
+@@ -156,0 +164 @@
++   result['skill_source']=str(skills) if skills.is_dir() else None
+@@ -185 +193 @@
+-  facts={'task':row['task'],'feedback':public_feedback(row['feedback']),'execution_status':row['execution']['execution_status'],'metrics':feedback_metrics(row['execution']),'current_version':before,'editing_drafts':editing,'budget':{'scope':CFG.get('budget_policy','whole_run_shared'),'max_attempts':CFG['max_attempts'],'max_tokens':CFG['max_tokens'],'used':self.meter.snapshot(),'seconds_remaining':deadline-time.time() if math.isfinite(deadline) else None,'heldout_reserve_seconds':CFG['heldout_reserve_seconds']},'previous_learning':[{'decision':r.get('decision'),'outcome':r.get('outcome'),'comparison':r.get('public_comparison')} for r in self.state['learning']]}
++  facts={'task':row['task'],'public_task_requirements':(ROOT/'local-tasks'/row['task']/'instruction.md').read_text(),'feedback':public_feedback(row['feedback']),'execution_status':row['execution']['execution_status'],'metrics':feedback_metrics(row['execution']),'current_version':before,'editing_drafts':editing,'budget':{'scope':CFG.get('budget_policy','whole_run_shared'),'max_attempts':CFG['max_attempts'],'max_tokens':CFG['max_tokens'],'used':self.meter.snapshot(),'seconds_remaining':deadline-time.time() if math.isfinite(deadline) else None,'heldout_reserve_seconds':CFG['heldout_reserve_seconds']},'previous_learning':[{'decision':r.get('decision'),'outcome':r.get('outcome'),'comparison':r.get('public_comparison')} for r in self.state['learning']]}
+--- a/prompts/learn.txt
++++ b/prompts/learn.txt
+@@ -11,0 +12,3 @@
++
++反馈归因：有效低分是已知事实，但官方摘要不披露具体失败原因。先对照 public_task_requirements 和已有执行记录，区分已验证、失败、未验证；不得从统计摘要编造断言或把成本高当作低分原因。把根因假设与证据分开：能定位质量问题时先解释质量机制；证据不足时可以改成本，但明确它不解释本次低分。禁止寻找隐藏测试补足归因。
++行为验证：evaluate 的任务应针对本次可观察预测，提供通用、小型、公开的失败场景；要求候选实际操作并留下退出码、产物和下一步选择。至少覆盖该修改针对的失败分支，不以“读到了规则”或重复规则代替行为。需要重复验证时优先用版本中 .agents/skills/reliable-verification 的工具；无需新增核心设施。最终决定要区分策略加载、行为变化、任务收益。
+--- a/prompts/decision.txt
++++ b/prompts/decision.txt
+@@ -6,0 +7,2 @@
++
++核对原生验证的具体工具动作、退出码、实际产物是否符合候选的行为预测。completed 只表示运行结束；只有指令已加载、没有行动证据时，明确行为未证实，不能宣称机制修复。配对的质量/成本/耗时收益与原生机制证据分别说明。
+--- a/test_runner.py
++++ b/test_runner.py
+@@ -230,0 +231,7 @@
++
++class PublicFeedbackTest(unittest.TestCase):
++ def test_diagnosis_does_not_leak_or_invent_hidden_failure_cause(self):
++  feedback=runner.public_feedback({'valid':True,'status':'scored','reward':0,'summary':{'passed':4,'failed':1},'tests':['secret-test'],'assertion':'secret assertion','raw_log':'secret input','reference':'secret solution'})
++  self.assertEqual(feedback['diagnosis']['specific_cause'],'unknown')
++  self.assertNotIn('secret',json.dumps(feedback))
++  self.assertEqual(feedback['reward'],0)
