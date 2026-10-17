@@ -7,3 +7,11 @@
 - [x] 6. 文档与项目记忆收尾
 
 结果：提交152c104，独立源码135/135；优化后153/153、正式八场景、类型和OpenSpec通过。证据`.seeda/validation/simplify-architecture/report.md`。
+
+## 用户后续授权的发布
+- [x] 7. 选择性提交架构变更9947a8d，导出该提交源码
+- [x] 8. 配套宿主完整回归、Agent-only独立验证与发布
+- [x] 9. 安装宿主、设默认、实际全局CLI全路径验证
+- [x] 10. 发布记录、推送及远端提交核对
+
+发布验证：源码9947a8d已推送，宿主137/137、Agent54/54、实际全局CLI默认及恢复验证通过；本次记录提交后追加推送。证据`.seeda/validation/self-repair-release/report.md`。
