@@ -43,9 +43,7 @@ const selected = client ? await client.request('session', { cwd }).catch(error =
 }) as { id: string; messages: Message[] } : undefined;
 if (client) client.sessionId = selected!.id;
 const history = selected?.messages ?? session!.messages;
-const model = client ? undefined : new DeepSeekModel({ apiKey: process.env.DEEPSEEK_API_KEY ?? '',
-  baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL,
-  thinking: process.env.SEEDA_THINKING === '1', retry: { onRetry: info => onEvent({ type: 'retrying', attempt: info.attempt, delayMs: info.delayMs, error: info.error.message }) } });
+const model = client ? undefined : DeepSeekModel.fromEnvironment(info => onEvent({ type: 'retrying', attempt: info.attempt, delayMs: info.delayMs, error: info.error.message }));
 const prompt = parsed.prompt ?? '';
 const interactive = !prompt && Boolean(process.stdin.isTTY && process.stdout.isTTY);
 let refresh = () => {};

@@ -56,6 +56,11 @@ export interface DeepSeekOptions {
   retry?: RetryOptions;
 }
 export class DeepSeekModel implements Model {
+  static fromEnvironment(onRetry?: RetryOptions['onRetry']): DeepSeekModel {
+    return new DeepSeekModel({ apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+      baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL,
+      thinking: process.env.SEEDA_THINKING === '1', retry: { onRetry } });
+  }
   get maxOutputTokens(): number { return this.options.maxTokens ?? 4096; }
   private readonly options: DeepSeekOptions;
   constructor(options: DeepSeekOptions) {

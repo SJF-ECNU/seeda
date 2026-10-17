@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, Session, BashTool } from '../src/index.ts';
-import { RuntimeRecordsTool } from '../src/tools/runtime-records.ts';
+import { RuntimeRecordsTool } from '../src/core/runtime-records-tool.ts';
 import type { Model, ModelResponse, Message } from '../src/core/types.ts';
 
 async function workspace(t: { after(fn: () => Promise<void>): void }) {

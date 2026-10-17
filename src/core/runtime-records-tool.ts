@@ -1,7 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Session } from '../core/session.ts';
-import type { Tool } from '../core/types.ts';
+import type { Session } from './session.ts';
+import type { Tool } from './types.ts';
 
 export class RuntimeRecordsTool implements Tool {
   readonly definition = { type: 'function' as const, function: {

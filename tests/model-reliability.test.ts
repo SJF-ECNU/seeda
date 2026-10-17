@@ -21,3 +21,29 @@ test('real model retries 503 and per-attempt timeout, but never 401 or already s
  scenario='401';requests=0;await assert.rejects(model.complete([],[],new AbortController().signal),/401/);assert.equal(requests,1);
  scenario='partial';requests=0;let text='';await assert.rejects(model.complete([],[],new AbortController().signal,s=>{text+=s;}),/interrupted/);assert.equal(requests,1);assert.equal(text,'part');
 });
+
+test('environment construction captures model settings and preserves retry notifications', async t => {
+ const keys = ['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'SEEDA_THINKING'];
+ const saved = keys.map(key => process.env[key]);
+ t.after(() => keys.forEach((key, i) => { if (saved[i] === undefined) delete process.env[key]; else process.env[key] = saved[i]; }));
+ const bodies: any[] = []; const authorizations: (string | undefined)[] = [];
+ const http = createServer(async (req, res) => {
+  let input = ''; for await (const chunk of req) input += chunk;
+  bodies.push(JSON.parse(input)); authorizations.push(req.headers.authorization);
+  if (bodies.length === 1) { res.statusCode = 503; res.end(); }
+  else { res.setHeader('Content-Type', 'text/event-stream'); res.end(complete); }
+ });
+ await new Promise<void>(r => http.listen(0, '127.0.0.1', r));
+ t.after(() => { http.closeAllConnections(); http.close(); });
+ const address = http.address(); assert.ok(address && typeof address !== 'string');
+ Object.assign(process.env, { DEEPSEEK_API_KEY: 'fixture-key', DEEPSEEK_BASE_URL: `http://127.0.0.1:${address.port}`, DEEPSEEK_MODEL: 'fixture-model', SEEDA_THINKING: '1' });
+ const retries: number[] = [];
+ const model = DeepSeekModel.fromEnvironment(info => retries.push(info.attempt));
+ process.env.DEEPSEEK_API_KEY = 'changed-after-construction'; process.env.DEEPSEEK_MODEL = 'changed';
+ assert.equal((await model.complete([], [], new AbortController().signal)).message.content, 'ok');
+ assert.equal(retries.length, 1); assert.equal(bodies.length, 2);
+ for (const body of bodies) { assert.equal(body.model, 'fixture-model'); assert.deepEqual(body.thinking, { type: 'enabled' }); }
+ assert.deepEqual(authorizations, ['Bearer fixture-key', 'Bearer fixture-key']);
+ delete process.env.DEEPSEEK_API_KEY;
+ assert.throws(() => DeepSeekModel.fromEnvironment(), /DEEPSEEK_API_KEY is required/);
+});

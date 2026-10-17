@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Agent } from '../src/core/agent.ts';
 import { Session } from '../src/core/session.ts';
 import { compactContext, estimateContextTokens, projectInstructions } from '../src/core/context.ts';
-import { RuntimeRecordsTool } from '../src/tools/runtime-records.ts';
+import { RuntimeRecordsTool } from '../src/core/runtime-records-tool.ts';
 import type { Message, Model } from '../src/core/types.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {

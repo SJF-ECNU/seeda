@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadInstructions } from '../src/core/context.ts';
 import { Agent, Session } from '../src/index.ts';
-import { RuntimeRecordsTool } from '../src/tools/runtime-records.ts';
+import { RuntimeRecordsTool } from '../src/core/runtime-records-tool.ts';
 
 test('own instructions and memory come from implementation while rules and Skills come from project', async t => {
   const root = await mkdtemp(join(tmpdir(), 'seeda-instr-')); t.after(() => rm(root, { recursive: true, force: true }));

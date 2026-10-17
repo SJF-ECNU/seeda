@@ -1,7 +1,7 @@
 import type { AgentEvent, ExecutionFailure, Model, Tool, ToolCall } from './types.ts';
 import { executionFailure, toolFailure } from './runtime-records.ts';
 import { Session } from './session.ts';
-import { RuntimeRecordsTool } from '../tools/runtime-records.ts';
+import { RuntimeRecordsTool } from './runtime-records-tool.ts';
 import { compactContext, contextSize, ContextTokens, estimateContextTokens, loadInstructions } from './context.ts';
 
 export interface AgentOptions {

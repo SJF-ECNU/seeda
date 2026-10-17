@@ -107,6 +107,16 @@ worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 
 
 实现与检查表见 [[openspec/changes/crash-self-repair/design]]、[[openspec/changes/crash-self-repair/tasks]]。完整路径验证使用本地固定模型，只证明恢复及自改管理机制，不能据此宣称自主修复能力或任务收益。
 
+## 核心代码职责（2026-10-17 工作树）
+
+核心保持现有模块边界：`core` 负责执行循环、会话、上下文和自身运行记录；`model` 负责模型接入；`tools` 提供外部操作；`runtime` 负责进程与控制连接；`versions` 持久化版本与切换；`sandbox` 隔离候选。前端消费事件，Agent 自身快照与稳定宿主继续分离。
+
+- `RuntimeRecordsTool` 位于 `src/core/runtime-records-tool.ts`，仍由 Agent 默认安装；核心不再反向依赖外部工具目录。工具名称、返回内容与日志权限不变。仓库内部导入同步迁移，历史版本快照保留各自文件树。
+- `Supervisor.connection` 只负责 socket 分帧、大小限制、请求 ID 和回包，业务操作由同一类的私有 `dispatch` 处理。各请求仍独立异步执行，长请求不阻塞取消；没有引入 Router 或新的调度层。
+- CLI 与 worker 共用 `DeepSeekModel.fromEnvironment`，显式构造器继续支持程序传参。网络初始化和前端事件仍归入口；共享方法放在候选快照保留的模型模块。
+
+以上为局部职责调整，不改变命令、IPC 消息、会话格式、恢复顺序、预算或候选接替条件。方案与验证清单见 [[openspec/changes/simplify-architecture/design]]、[[openspec/changes/simplify-architecture/tasks]]；尚未发布或激活。
+
 ## 验证与证据
 
 运行 `npm run check` 与 `npm test`。新增实测覆盖：Git/独立依赖、SQLite 重开、真实 A/B 并行、验证失败与取消、忙碌交接、B 初始化失败、主实例 SIGKILL、心跳失联 SIGSTOP、Bash 进程组清理、管理进程 SIGKILL、未完成切换及已提交切换的重启恢复。

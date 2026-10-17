@@ -41,7 +41,7 @@ const remoteCommand: CommandExecutor = (input, context) => {
 const usesHostExecution = role === 'primary' && process.env.SEEDA_HOST_EXECUTION === '1';
 const bash = new BashTool(16_384, (pid, started) => send({ type: 'process', pid, started }), usesHostExecution ? remoteCommand : undefined);
 if (usesHostExecution) bash.definition.function.description += ` Host-selected execution environment: ${process.env.SEEDA_EXECUTION_DESCRIPTION}. Full-output artifact paths refer to host storage.`;
-const agent = new Agent({ cwd, session, artifactDir, model: new DeepSeekModel({ apiKey: process.env.DEEPSEEK_API_KEY ?? '', baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL, thinking: process.env.SEEDA_THINKING === '1', retry: { onRetry: info => send({ type: 'event', event: { type: 'retrying', attempt: info.attempt, delayMs: info.delayMs, error: info.error.message } }) } }), tools: role === 'primary' ? [bash, management] : [bash], onEvent: event => send({ type: 'event', event }) });
+const agent = new Agent({ cwd, session, artifactDir, model: DeepSeekModel.fromEnvironment(info => send({ type: 'event', event: { type: 'retrying', attempt: info.attempt, delayMs: info.delayMs, error: info.error.message } })), tools: role === 'primary' ? [bash, management] : [bash], onEvent: event => send({ type: 'event', event }) });
 let active: Promise<void> | undefined;
 const heartbeat = setInterval(() => send({ type: 'heartbeat' }), 1000);
 const stop = () => {

@@ -20,6 +20,8 @@ export interface RecoveryPolicy {
   beforeResume?: () => Promise<void> | void;
 }
 
+type ControlRequest = { id: string; operation: string; input?: string; args?: Record<string, unknown> };
+
 export class Supervisor {
   readonly store: VersionStore;
   readonly cwd: string;
@@ -312,6 +314,31 @@ export class Supervisor {
       default: throw new Error('Unknown management operation');
     }
   }
+  private async dispatch(request: ControlRequest, onEvent: (event: AgentEvent) => void): Promise<unknown> {
+    if (request.operation === 'history') {
+      if (request.args?.cwd && realpathSync(String(request.args.cwd)) !== this.cwd) throw new Error('Supervisor belongs to a different working directory');
+      return sessionHistory(this.store.root, this.sessionId());
+    }
+    if (request.operation === 'session') {
+      if (request.args?.cwd && realpathSync(String(request.args.cwd)) !== this.cwd) throw new Error('Supervisor belongs to a different working directory');
+      const id = this.sessionId(); const messages = await sessionHistory(this.store.root, id);
+      if (this.switching || id !== this.sessionId()) throw new Error('Session is changing; reconnect after the switch');
+      return { id, messages };
+    }
+    if (request.operation === 'sessions') return { current: this.sessionId(), sessions: await listSessions(this.store.root) };
+    if (request.operation === 'new') return this.changeSession(undefined, true);
+    if (request.operation === 'resume') return this.changeSession(String(request.args?.id));
+    if (request.operation === 'run' || request.operation === 'compact') {
+      if (request.args?.session && request.args.session !== this.sessionId()) throw new Error('会话已切换，请确认当前会话后重新发送');
+      if (request.operation === 'run' && typeof request.input !== 'string') throw new Error('Missing input');
+      return this.run(request.input ?? '', onEvent, request.operation === 'compact');
+    }
+    if (request.operation === 'cancel') { this.cancel(); return { status: 'cancelled' }; }
+    if (request.operation === 'select') return this.select(String(request.args?.version));
+    if (request.operation === 'manage') return this.manage(request.args ?? {});
+    if (request.operation === 'stop') { setTimeout(() => { void this.close(); }, 20); return { status: 'stopping' }; }
+    throw new Error('Unknown operation');
+  }
   private connection(socket: Socket): void {
     socket.setEncoding('utf8');
     this.sockets.add(socket); socket.once('close', () => this.sockets.delete(socket));
@@ -322,35 +349,10 @@ export class Supervisor {
       let end: number;
       while ((end = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-        let request: { id: string; operation: string; input?: string; args?: Record<string, unknown> };
+        let request: ControlRequest;
         try { request = JSON.parse(line); if (typeof request.id !== 'string') throw new Error('Missing request id'); }
         catch { socket.destroy(); return; }
-        const handle = async () => {
-          if (request.operation === 'history') {
-            if (request.args?.cwd && realpathSync(String(request.args.cwd)) !== this.cwd) throw new Error('Supervisor belongs to a different working directory');
-            return sessionHistory(this.store.root, this.sessionId());
-          }
-          if (request.operation === 'session') {
-            if (request.args?.cwd && realpathSync(String(request.args.cwd)) !== this.cwd) throw new Error('Supervisor belongs to a different working directory');
-            const id = this.sessionId(); const messages = await sessionHistory(this.store.root, id);
-            if (this.switching || id !== this.sessionId()) throw new Error('Session is changing; reconnect after the switch');
-            return { id, messages };
-          }
-          if (request.operation === 'sessions') return { current: this.sessionId(), sessions: await listSessions(this.store.root) };
-          if (request.operation === 'new') return this.changeSession(undefined, true);
-          if (request.operation === 'resume') return this.changeSession(String(request.args?.id));
-          if (request.operation === 'run' || request.operation === 'compact') {
-            if (request.args?.session && request.args.session !== this.sessionId()) throw new Error('会话已切换，请确认当前会话后重新发送');
-            if (request.operation === 'run' && typeof request.input !== 'string') throw new Error('Missing input');
-            return this.run(request.input ?? '', event => send({ id: request.id, event }), request.operation === 'compact');
-          }
-          if (request.operation === 'cancel') { this.cancel(); return { status: 'cancelled' }; }
-          if (request.operation === 'select') return this.select(String(request.args?.version));
-          if (request.operation === 'manage') return this.manage(request.args ?? {});
-          if (request.operation === 'stop') { setTimeout(() => { void this.close(); }, 20); return { status: 'stopping' }; }
-          throw new Error('Unknown operation');
-        };
-        void handle().then(result => send({ id: request.id, result }), error => send({ id: request.id, error: error instanceof Error ? error.message : 'Runtime failed' }));
+        void this.dispatch(request, event => send({ id: request.id, event })).then(result => send({ id: request.id, result }), error => send({ id: request.id, error: error instanceof Error ? error.message : 'Runtime failed' }));
       }
     });
   }
