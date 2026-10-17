@@ -37,3 +37,11 @@
 +  self.assertEqual(feedback['diagnosis']['specific_cause'],'unknown')
 +  self.assertNotIn('secret',json.dumps(feedback))
 +  self.assertEqual(feedback['reward'],0)
+--- a/report.py
++++ b/report.py
+@@ -29 +29 @@
+-   cost=json.loads(stopped_cost.read_text());row.update(recorded_stop_cost=cost,observed_usage=cost.get('meter',{}).get('usage'),run_wall_seconds=cost.get('wall_seconds_to_stop'))
++   cost=json.loads(stopped_cost.read_text());row.update(recorded_stop_cost=cost,observed_usage=cost.get('known_usage') or cost.get('meter',{}).get('usage'),run_wall_seconds=cost.get('run_wall_seconds_to_stop',cost.get('wall_seconds_to_stop')))
+@@ -31 +31 @@
+- rollup={'current':effort,'previous_runs':previous,'preparation':{'separate':True,'provider_calls':0,'evidence':str(directory.parent.parent/'preparation')},'currency_total':None,'missing_usage_is_not_zero':True}
++ rollup={'current':effort,'previous_runs':previous,'preparation':{'separate':True,'provider_calls':None,'evidence':s.get('config',{}).get('preparation_evidence',[str(directory.parent.parent/'preparation')]),'note':'Preparation may include paid probes; read the linked receipts. Unknown aggregate is not zero.'},'currency_total':None,'missing_usage_is_not_zero':True}
