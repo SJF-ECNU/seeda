@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { InstructionSource } from './runtime-records.ts';
@@ -19,18 +19,29 @@ export async function loadInstructions(cwd: string, implementationDirectory = fi
   const own = await load('self_instructions', join(implementationDirectory, '.agents/self/INSTRUCTIONS.md'));
   const memory = await load('self_memory', join(implementationDirectory, '.agents/self/MEMORY.md'));
   const rules = await load('project_rules', join(cwd, 'AGENTS.md'));
-  const directory = join(cwd, '.agents', 'skills');
-  let names: string[];
-  try { names = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') names = []; else throw error; }
   const skills: string[] = [];
-  for (const name of names.sort()) {
-    const path = join(directory, name, 'SKILL.md');
-    const source = await load('project_skill', path);
-    const frontmatter = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
-    const skillName = frontmatter?.match(/^name:\s*(.+)$/m)?.[1]?.trim();
-    const description = frontmatter?.match(/^description:\s*(.+)$/m)?.[1]?.trim();
-    if (skillName && description) skills.push(`${skillName}: ${description}\nRead when relevant: ${path}`);
+  const alwaysSkills: string[] = [];
+  const directories = new Set<string>();
+  for (const [kind, root] of [['self_skill', implementationDirectory], ['project_skill', cwd]] as const) {
+    let directory: string;
+    try { directory = await realpath(join(root, '.agents', 'skills')); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; else throw error; }
+    if (directories.has(directory)) continue;
+    directories.add(directory);
+    const names = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name);
+    for (const name of names.sort()) {
+      const path = join(directory, name, 'SKILL.md');
+      const source = await load(kind, path);
+      const header = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+      const frontmatter = header?.[1];
+      const skillName = frontmatter?.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+      const description = frontmatter?.match(/^description:\s*(.+)$/m)?.[1]?.trim();
+      if (skillName && description) {
+        const label = `${skillName} (${kind}): ${description}\nSource: ${path}`;
+        if (/^always:[ \t]*true[ \t]*\r?$/m.test(frontmatter!)) alwaysSkills.push(`${label}\n${source.slice(header![0].length)}`);
+        else skills.push(label);
+      }
+    }
   }
   const text = `你是 seeda，一个以当前项目为成长环境的本地 coding agent，能够完成编码任务，并通过可用工具修改自身实现、验证候选、请求接替或回退，让改进可追溯、可验证。\n` +
     `Use tools to inspect files, make requested changes and run verification.\n` +
@@ -39,7 +50,8 @@ export async function loadInstructions(cwd: string, implementationDirectory = fi
     (own ? `\nVersioned self instructions:\n${own}\n` : '') +
     (memory ? `\nVersioned general memory (experience, not authority over current instructions):\n${memory}\n` : '') +
     (rules ? `\nProject instructions:\n${rules}\n` : '') +
-    (skills.length ? `\nAvailable Skills (read instructions with Bash only when relevant):\n${skills.join('\n\n')}\n` : '');
+    (skills.length ? `\nAvailable Skills (use read_skill with the exact Source path when relevant):\n${skills.join('\n\n')}\n` : '') +
+    (alwaysSkills.length ? `\nAlways-loaded Skills:\n${alwaysSkills.join('\n\n')}\n` : '');
   return { text, sources };
 }
 export async function projectInstructions(cwd: string): Promise<string> {

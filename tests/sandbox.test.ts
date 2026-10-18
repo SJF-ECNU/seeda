@@ -183,3 +183,31 @@ test('macOS refuses candidate loading when kernel ownership cannot be verified',
  try{await exit;assert.match(failure,/Cannot verify/);await assert.rejects(readFile(join(work,'loaded')));process.kill(process.pid,0);}
  finally{guardian.kill('SIGKILL');await rm(f.root,{recursive:true,force:true});}
 });
+
+for (const timeoutMs of [500, null]) {
+ test(`candidate budget ${timeoutMs ?? 'unset'} keeps termination and cleanup`, {skip:!processSupported,timeout:12000}, async()=>{
+  const f=await fixture();
+  await writeFile(join(f.runtime,'src/runtime/worker.ts'), `import{writeFileSync}from'node:fs';process.send({type:'ready'});process.on('message',m=>{if(m.type==='run'){writeFileSync(process.argv[2]+'/pid',String(process.pid));setInterval(()=>{},50);}});`);
+  const candidate=new SandboxCandidate('process',f.runtime,f.work,()=>{}, timeoutMs===null ? null : {timeoutMs,maxModelCalls:64});
+  try {
+   await candidate.ready;
+   const running=assert.rejects(candidate.run('wait'), timeoutMs===null ? /cancelled/ : /timed out/);
+   if(timeoutMs===null){await new Promise(r=>setTimeout(r,800));candidate.cancel();}
+   await running;await candidate.stop().catch(error=>{if(timeoutMs===null)throw error;assert.match(error.message,/timed out/);});
+   const pid=Number(await readFile(join(f.work,'workspace/pid'),'utf8'));
+   if(process.platform==='darwin')assert.throws(()=>process.kill(pid,0));
+  } finally {await candidate.stop().catch(()=>{});await rm(f.root,{recursive:true,force:true});}
+ });
+}
+
+test('unbudgeted sandbox accepts cumulative output above 16 MiB but rejects oversized messages', {skip:!processSupported,timeout:20000},async()=>{
+ for(const oversized of [false,true]){
+  const f=await fixture();let events=0;
+  await writeFile(join(f.runtime,'src/runtime/worker.ts'), `process.send({type:'ready'});process.on('message',m=>{if(m.type!=='run')return;if(${oversized})process.stdout.write('x'.repeat(9*1024*1024));else{for(let n=0;n<17000;n++)process.send({type:'event',event:{type:'text',text:'x'.repeat(1024)}});process.send({type:'result',answer:'streamed'});}});`);
+  const candidate=new SandboxCandidate('process',f.runtime,f.work,()=>{events++;},null);
+  try {
+   if(oversized)await assert.rejects(candidate.run('output'),/oversized|output limit/);
+   else{assert.equal(await candidate.run('output'),'streamed');assert.equal(events,17000);}
+  }finally{await candidate.stop().catch(()=>{});await rm(f.root,{recursive:true,force:true});}
+ }
+});

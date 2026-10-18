@@ -13,6 +13,8 @@ updated_at: 2026-10-17
 
 需要 Node.js 24.14+、Git、npm；DeepSeek 凭据从现有 `DEEPSEEK_API_KEY` 环境变量传给守护，不能写入版本或数据库。
 
+当前工作树的模型适配器默认开启思考并使用 `reasoning_effort=max`；主Agent与原生候选采用同一默认。`SEEDA_THINKING=0` 或代码中的 `thinking:false` 可显式关闭，候选可修改同一模型的推理与采样实现。默认输出空间为 Max 128K、其他思考64K、非思考8K，显式 `maxTokens` 优先；截断工具调用的安全处理不变。实验计量代理只固定模型身份、连接与用量采集，透传候选参数，按请求记录实际转发的推理参数和供应商用量；参数被供应商接受不等于所有参数都生效（例如思考模式下 temperature 被忽略）。这些修改尚未发布，不改变已有运行中版本。参数依据：[DeepSeek思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)及[API参数](https://api-docs.deepseek.com/api/create-chat-completion/)。
+
 在 seeda 仓库执行 `npm start` 即可。默认 CLI 自动连接同项目的已有守护；不存在时自动初始化专用 Git/SQLite、安装版本依赖、启动后台守护并等待主 Agent ready，再进入 TUI。首次依赖安装需要等待。启动失败报告日志路径，不会退回直接模式；现有其他项目的守护也不会被接管。
 
 在其他工作项目中使用同一 CLI：
@@ -38,7 +40,7 @@ TUI 中 `/versions` 查看版本，`/use 完整版本ID` 选择版本，`/rollba
 | 版本与成长 | src/versions/store.ts | 专用 Git、独立依赖、SQLite 成长与运行记录 |
 | 守护 | src/runtime | socket 路由、worker IPC、ready/心跳、候选验证、切换和回退 |
 
-守护保持原启动代码，不随 Agent 候选接替。每个 Agent 从登记版本的 `src/runtime/worker.ts` 启动；前端复用 text/tool/end 事件。管理状态没有质量评分，质量结论来自 Agent。
+运行中的守护保持本次启动加载的代码；worker 接替本身不会替换已经导入的宿主模块。这是进程生命周期边界，不是不可进化代码边界。每个 Agent 从登记版本的 `src/runtime/worker.ts` 启动；前端复用 text/tool/end 事件。宿主实现的变更需要从目标版本启动新进程并验证，见文末完整代码范围。管理状态没有独立质量评分。
 
 ## 数据与版本
 
@@ -61,7 +63,7 @@ SQLite 保存 versions、drafts、evaluations、instances、runtime_state、swit
 3. `submit` 传 draft 和 reason，形成 Git 提交、独立依赖和候选版本 B。
 4. `evaluate` 传 version、task 和可选 sandbox（process/container，默认 process），由 B 在沙箱内的独立工作目录及会话中执行真实任务。主 A 仍存活，另一个前端请求可在 A 空闲时执行。一次最多运行一个候选验证；验证任务需要在独立目录准备自己的测试输入。
 5. `evidence` 获取原始验证记录。A 用 `decide` 传 evaluation、accept/reject 和具体 reason；只有完成的验证能记录 accept。
-6. `promote` 传 version、evaluation 和 reason；当前 A 对该 B 的接受记录满足生命周期条件后，守护在请求边界接替。A 也可用 `rollback` 和 reason 请求质量回退。
+6. `promote` 传 version、evaluation 和 reason；当前 A 对该 B 的接受记录满足生命周期条件后，支持批次交接的 worker 在当前工具批次完整落盘后由守护接替，并在同一会话和项目目录继续原任务；旧 worker 保留请求结束后的兼容切换。A 也可用 `rollback` 和 reason 请求质量回退。
 
 候选没有 management 工具；默认 process 支持继承隔离的 Bash 和测试子进程，需要独立 Linux 环境与依赖时选择 container。候选验证历史不复制到正式用户会话。候选使用与主版本相同的模型连接配置，评价不是模型或参数差异造成的效果声明。
 
@@ -87,7 +89,7 @@ worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 
 
 崩溃恢复先清理所属命令、候选和在途管理操作，再给故障版本两次重启机会；仍启动失败或 ready 后再次崩溃，才用第三次机会启动 previous。没有 previous 或禁止回退则停止。ready 不清零次数，完成用户请求才清零；同版本重启不覆盖 previous 指针。该能力已随2026-10-17的配套宿主与seeda-agent-self-repair发布；旧项目不会自动更换其Agent。
 
-切换先持久化意图，阻止新输入并等待当前请求结束。为保证正式 session 只有一个写入者，先停止 A，再启动 B 加载同一 session；B ready 后事务更新 current/previous 和成功记录。B 无法启动时先重试 B 两次，再恢复 A 并保存失败切换；固定版本评测禁止自动回退。这个实现允许短暂停顿。
+切换先持久化意图并阻止新输入。当前 worker 支持正常让出时，在整批工具结果落盘后交接，不等待模型结束整个任务；旧 worker 则等待当前请求结束。为保证正式 session 只有一个写入者，先停止 A，再启动 B 加载同一 session；B ready 后事务更新 current/previous 和成功记录。B 无法启动时先重试 B 两次，再恢复 A 并保存失败切换；固定版本评测禁止自动回退。这个实现允许短暂停顿。
 
 管理进程断开 IPC 后 worker 会取消任务并退出，超时清理；守护被终止后重新 `serve` 会放弃未完成意图、标记中断实例与验证，再按已提交 current 启动。current 已提交 B 时先恢复 B，反复启动失败才恢复 previous。整个宿主重启不自动重放未完成任务；只有仍存活的 Supervisor 才能在原请求、原计费与原截止时间中续接 worker。未保存结果的工具恢复为 unknown，由智能体检查现场。
 
@@ -109,7 +111,7 @@ worker 初始化后报告 ready，每秒心跳；启动上限 15 秒，连续 6 
 
 ## 核心代码职责（2026-10-17 工作树）
 
-核心保持现有模块边界：`core` 负责执行循环、会话、上下文和自身运行记录；`model` 负责模型接入；`tools` 提供外部操作；`runtime` 负责进程与控制连接；`versions` 持久化版本与切换；`sandbox` 隔离候选。前端消费事件，Agent 自身快照与稳定宿主继续分离。
+核心保持现有模块边界：`core` 负责执行循环、会话、上下文和自身运行记录；`model` 负责模型接入；`tools` 提供外部操作；`runtime` 负责进程与控制连接；`versions` 持久化版本与切换；`sandbox` 隔离候选。前端消费事件，运行中的宿主与 worker 仍是不同进程职责；完整源码快照范围见文末。
 
 - `RuntimeRecordsTool` 位于 `src/core/runtime-records-tool.ts`，仍由 Agent 默认安装；核心不再反向依赖外部工具目录。工具名称、返回内容与日志权限不变。仓库内部导入同步迁移，历史版本快照保留各自文件树。
 - `Supervisor.connection` 只负责 socket 分帧、大小限制、请求 ID 和回包，业务操作由同一类的私有 `dispatch` 处理。各请求仍独立异步执行，长请求不阻塞取消；没有引入 Router 或新的调度层。
@@ -175,7 +177,7 @@ instances.reason 区分 `Worker heartbeat timed out`、`Worker startup timed out
 
 ## 前端独立更新
 
-全局命令始终使用安装目录的CLI/TUI/守护；select和promote只切换Agent worker。新保存和发布的种系排除前端与外部管理代码；旧快照兼容，不从版本目录启动其CLI。安装更新可使用仓库npm link；守护管理代码变更需seeda stop后重开。前端保持同一socket连接即可观察新主实例，无需跟随Agent更新全局入口。
+全局命令始终使用安装目录的CLI/TUI/守护；select和promote只切换Agent worker。早期保存和发布的种系排除前端与管理代码；当前开发版已改为完整实现快照，历史快照不会补写缺失源码。安装更新可使用仓库npm link；守护管理代码变更需seeda stop后重开。前端保持同一socket连接即可观察新主实例，无需跟随Agent更新全局入口。
 
 ## 基础版本后续更新
 当前工作树已补齐结构化执行反馈、evaluate有界摘要、显式acceptReason合并接替和宿主执行接入。旧操作及隔离/回退仍保留，已有种系不会自动升级。细节与实测边界见 [[docs/基础版本最小改造与验证]]。
@@ -185,3 +187,30 @@ instances.reason 区分 `Worker heartbeat timed out`、`Worker startup timed out
 2026-10-17本机已安装源码提交`9947a8d`的配套宿主，并将`seeda-agent-self-repair`设为全局默认。新建非交互项目使用该默认；既有项目仍保留原版本选择。新版需要配套宿主支持resume协议，不能只替换Agent而沿用旧守护。旧种系与旧宿主保留用于主动回退。
 
 发布验证：干净宿主137/137、Agent-only 54/54和类型检查通过；真实全局CLI新项目验证默认加载、截断反馈、日志读取、同版本崩溃恢复以及实际命令退出码与产物。证据保存在`.seeda/validation/self-repair-release/`，固定模型验证不代表自主能力收益。
+
+
+## 完整代码可进化与可靠验证（2026-10-18 开发版，未发布）
+
+候选范围包含整个 `src/`、测试、`.agents/`、脚本、`bin/` 和构建所需的 package/锁文件、tsconfig；不再裁掉 Supervisor、版本管理、模型、执行器、guardian 或前端。敏感环境文件、运行数据库、依赖目录和会话不进入实现快照。提交仍走 Git 与原有版本事务，安装保持 `--ignore-scripts`；没有把实现文件划成永久不可修改区域。
+
+版本技能和项目技能都进入发现目录，`read_skill` 由 Agent 在宿主读取已发现的明确路径，避免让容器 Bash 读取宿主文件。技能可在 frontmatter 声明 `always: true`，将必要正文随版本加载；未声明的技能仍按需读取。技能、加载器和工具本身都能作为候选代码修改。
+
+`verify` 复用既有 Bash 的本地/容器执行、隔离、超时与取消。`capture` 保存显式输入；`run` 在新目录复制输入和候选，直接运行目标 argv 和各项检查 argv，分别保存退出码、日志、候选与产物。目标非零即使内容匹配也失败；失败尝试不覆盖旧通过尝试。它是可修改的通用工具，不提供官方评分，也不证明捕获前的输入从未被改动。检查条件是否符合公开要求仍需 Agent 判断。
+
+普通 CLI 的 worker 接替不等于宿主完整接替。Terminal-Bench 的开发中集成采用每阶段独立 OS 进程，从选定版本加载 `VersionStore`、`Supervisor` 及其依赖；原生候选评测使用父版本控制逻辑，随后独立配对实际启动候选宿主。只有后续阶段的加载来源和实际行为证据才能证明宿主代码生效，不能仅凭 worker 的 `completed` 状态宣布完成。外部评分器、权限与计量继续位于被测实现之外。
+
+新宿主尚未正常启动就失败时，实验集成先确认相关进程结束和控制数据库无打开者，保存失败数据库及 WAL/SHM，再从阶段前 SQLite 备份恢复并停止。正常启动后已产生行为、native 已开始、数据库仍被占用或备份/日志损坏时不自动覆盖。恢复不撤销 Git、任务文件或外部副作用，也不自动改变版本指针或继续任务。
+
+实现与验收清单见 [[openspec/changes/terminal-bench-effective-evolution/design]] 第29节；正式轮仍暂停，未修改已安装默认版本。固定模型的代码接替测试、真实模型自主使用测试和真实 bench 能力结果分别记录，不互相替代。
+
+## 同任务工作与自改（当前工作树，未发布）
+
+原生primary同时提供工作工具与management，自改不需要先进入学习阶段或获得benchmark评分。仅在显式接受并请求接替时触发批次让出；没有待切换版本的普通循环不增加模型调用或强制反思。
+
+Supervisor复用现有performSwitch和resume，先停止旧session写者再启动选定worker，在同一请求内继续同一项目。内部yielded不是用户任务完成，前端只接收最终end；工具结果已落盘，不重放，也不重复添加用户消息。目标版本必须支持已有resume能力，否则明确报错，不猜测重放。
+
+记录不完整拒绝正常交接；启动失败维持原有重试/回退。取消优先：未切换的意图失败收尾，启动中的目标停止，不继续模型请求；若原worker已退出而切换又被取消，运行状态为stopped，需明确启动操作恢复可用性。没有取消隐式触发的重启。
+
+本功能是worker的同任务接替，不会替换已经运行的Supervisor宿主模块，完整宿主代码变更仍按上述进程生命周期边界验证。历史ALE阶段runner保留用于复现；日常自主工作使用原生Supervisor入口，不叠加其阶段限制。
+
+最小方案及验证清单：[[openspec/changes/unified-work-self-evolution/design]]；证据汇总见`.seeda/validation/unified-work-evolution/report.md`。正式实验保持停止，未发布或改变默认种系。

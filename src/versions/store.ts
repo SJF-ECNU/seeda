@@ -5,7 +5,7 @@ import { mkdir, chmod, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { agentOnly, copyAgent, snapshotFiles } from './snapshot.ts';
+import { copyAgent, stageSnapshot } from './snapshot.ts';
 
 const exec = promisify(execFile);
 export interface SeedOrigin { strain_id: string; strain_name: string; strain_commit: string; }
@@ -64,7 +64,7 @@ export class VersionStore {
     // Only implementation files; never copy local sessions, environment or credentials.
     await copyAgent(source, this.repo);
     await exec('git', ['init', this.repo]);
-    await this.git('add', ...snapshotFiles);
+    await stageSnapshot(this.repo);
     if (await this.git('diff', '--cached', '--name-only')) await this.git('-c', 'user.name=seeda', '-c', 'user.email=seeda@localhost', 'commit', '-m', 'Initial managed implementation');
     const commit = await this.git('rev-parse', 'HEAD'); const id = randomUUID(); const path = await this.install(commit, id);
     await this.git('update-ref', `refs/seeda/versions/${id}`, commit);
@@ -89,9 +89,7 @@ export class VersionStore {
     try {
     const git = async (...args: string[]) => (await exec('git', ['-C', draft.path, ...args])).stdout.trim();
     // Explicit paths exclude accidental local credentials and runtime output.
-    await agentOnly(draft.path);
-    await git('add', '-u');
-    await git('add', ...snapshotFiles);
+    await stageSnapshot(draft.path);
     if (await git('diff', '--cached', '--name-only')) await git('-c', 'user.name=seeda', '-c', 'user.email=seeda@localhost', 'commit', '-m', reason);
     const commit = await git('rev-parse', 'HEAD');
     if (commit === this.version(draft.parent_id).git_commit) throw new Error('Candidate has no implementation changes');

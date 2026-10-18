@@ -23,6 +23,8 @@ export class WorkerProcess {
   messages: Message[] = [];
   supportsCompact = false;
   supportsResume = false;
+  supportsYield = false;
+  yielded = false;
   failure?: Error;
   readonly logPath: string;
   private managementDone = new Set<Promise<void>>();
@@ -76,11 +78,11 @@ export class WorkerProcess {
       else if (message.type === 'heartbeat') this.lastHeartbeat = performance.now();
       else if (message.type === 'ready') {
         if (execution.kind === 'docker' && message.commandExecution !== true) { terminate('Agent version does not support host-selected execution'); return; }
-        initialized = true; this.lastHeartbeat = performance.now(); clearTimeout(deadline); this.messages = message.messages; this.supportsCompact = message.compact === true; this.supportsResume = message.resume === true;
+        initialized = true; this.lastHeartbeat = performance.now(); clearTimeout(deadline); this.messages = message.messages; this.supportsCompact = message.compact === true; this.supportsResume = message.resume === true; this.supportsYield = message.yield === true;
         store.db.prepare("UPDATE instances SET state='ready' WHERE id=?").run(this.id); readyResolve();
       } else if (message.type === 'event') event(message.event);
       else if (message.type === 'result') {
-        const pending = this.runPending; this.runPending = undefined; this.busy = false;
+        const pending = this.runPending; this.runPending = undefined; this.busy = false; this.yielded = message.yielded === true && !message.error;
         if (message.error) pending?.reject(new Error(message.error)); else pending?.resolve(message.answer ?? '');
       } else if (message.type === 'command_cancel') {
         if (this.command?.id === message.id) this.command.controller.abort();
@@ -114,7 +116,7 @@ export class WorkerProcess {
   run(input: string, resume?: { userCountBefore: number }): Promise<string> {
     if (resume && !this.supportsResume) return Promise.reject(new Error('Agent version does not support safe request recovery'));
     if (this.busy || this.stopping || !this.child.connected) return Promise.reject(new Error('Worker unavailable or busy'));
-    this.busy = true;
+    this.busy = true; this.yielded = false;
     return new Promise((resolve, reject) => { this.runPending = { resolve, reject }; this.send({ type: 'run', input, ...(resume ? { resume } : {}) }); });
   }
   compact(): Promise<string> {

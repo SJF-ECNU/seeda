@@ -1,25 +1,15 @@
 ---
 name: reliable-verification
-description: Preserve explicit input and candidate files, then check a real process exit and artifacts in a fresh working directory. Use for repeated experiments, destructive transformations, or suspicious validation results.
+description: Validate real process exits and outputs on preserved inputs, retaining every candidate and result.
+always: true
 ---
 
-Use the existing Bash tool and `scripts/verify.py` (Python 3 standard library). This is local self-verification, not an official benchmark score or a security sandbox. Public requirements determine checks; never inspect hidden tests.
+For repeated tests or transformations that edit inputs, use `verify` to capture selected untouched inputs before the first run, then run each candidate in a fresh attempt directory. The tool saves candidate files, inputs, output logs and per-check exits; it works through the current Bash execution environment without Python. Its result is local evidence, not an official benchmark score.
 
-First check `command -v python3`. If unavailable, do not install a runtime merely to use this skill. Follow the same procedure with existing shell tools: create a new record directory, `cp` selected untouched inputs once, create a new numbered work directory for each attempt, and copy inputs and candidate files there. Invoke the target directly, immediately save `$?`, then run each check and save its own exit code. The final shell exit must reflect **all** these codes, not the last `echo`/`head` command. Keep output, logs and candidate copies. For example, `target >command.log 2>&1; target_rc=$?; cmp output expected >check.log 2>&1; check_rc=$?; printf 'target=%s check=%s\n' "$target_rc" "$check_rc"; test "$target_rc" -eq 0 && test "$check_rc" -eq 0`. Use the existing Bash timeout safeguard for hangs. This fallback has the same evidence requirements; the Python helper only automates them.
+Before testing, state the hypothesis and checks derived from the public requirements. Pass the target as an argv array, with separate check argv arrays and required artifacts. Do not hide the target in `sh -c 'target; echo done'`: matching output cannot cancel a nonzero target exit. Include syntax, allowed operations and termination requirements when the task specifies them; do not invent stricter requirements.
 
-1. Before modifying input, choose the required input files and capture them once:
-   `python3 scripts/verify.py init RECORD_DIR SOURCE_DIR input.txt expected.txt`
-   Paths are relative to SOURCE_DIR. A pre-existing RECORD_DIR is rejected. Capture cannot prove that your source was originally clean: obtain a fresh legitimate source if provenance is uncertain.
-2. Write a JSON specification and run `python3 scripts/verify.py run RECORD_DIR spec.json`:
-   ```json
-   {"hypothesis":"The command should finish successfully and produce the expected bytes", "candidate_source":"/path/to/current/code", "candidates":["program.py"], "command":["python3","program.py"], "checks":[["cmp","output.txt","expected.txt"]], "artifacts":["output.txt"], "timeout_seconds":30}
-   ```
-   Each run copies saved inputs and current candidate files to a new attempt directory and invokes argv directly. Use relative input/output paths, not the original working files. Do not wrap the target in `sh -c 'target; echo done'`: the actual target must be the command. A caller-specified per-command timeout is a tool execution safeguard, not an experiment budget.
-3. Read `result.json`, process logs, and actual artifacts. `passed` requires target exit 0, every declared check exit 0, and every declared artifact present. Checks must cover the **public requirements**, including syntax, allowed operations and termination where applicable. Passing your checks does not imply complete coverage or official success.
-4. Keep the attempt directory. After a regression, recover candidate files from the earlier passing attempt's `candidate/`; never call a new failing version "the verified version". The helper never overwrites an earlier attempt. Input copies are for reproducibility, not protection against a malicious program; existing sandbox restrictions still apply.
+Read the returned result. A passing attempt is a recoverable candidate: keep its path and validate remaining requirements before trying unrelated alternatives. On a regression, recover that attempt's candidate files; do not overwrite the passing copy. If none passed all requirements, state what remains failed or unverified and preserve the best partial result. Never call a partial result a completed solution.
 
-Before each experiment state the hypothesis, changed variable, and what result would distinguish it. Use the result to choose the next action. If two attempts produce the same evidence, inspect existing logs (including `runtime_records`) before another variation. Change the hypothesis or obtain a smaller counterexample; do not keep renaming the same attempt.
+When attempts repeat the same evidence, inspect existing logs via `runtime_records` and recorded artifacts, identify the unanswered question, and choose a discriminating small test or honestly submit the incomplete result. A new filename or command permutation alone is not progress. Completion takes priority over unrequested perfection.
 
-If **no candidate has passed all known requirements**, preserve the best partial result and explicitly list failing/unverified requirements. There is no successful version to revert to. Either run an experiment that can resolve a specific unknown or submit the incomplete result honestly. Do not claim success from matching bytes alone when the command failed.
-
-When changing this strategy, specify a behavior prediction and exercise it in native evaluation: e.g. nonzero target exit despite matching output, a failed regression after a passing candidate, and no passing candidate. Inspect the recorded actions and files, not just the evaluation's completed status. These are examples to adapt, not benchmark answers.
+These instructions and the verification tool implementation are versioned, evolvable code. Improve them through draft, actual behavioral evaluation and explicit acceptance. Do not alter existing evidence or the external evaluator. If an older runtime has no `verify` tool, scripts/verify.py provides the same saved-attempt workflow where Python is available; otherwise use Bash to copy inputs and candidates into separate directories and record target/check exit codes individually.

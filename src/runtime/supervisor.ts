@@ -9,7 +9,7 @@ import type { AgentEvent } from '../core/types.ts';
 import { VersionStore, type Version, type SeedOrigin } from '../versions/store.ts';
 import type { ExecutionEnvironment } from './execution.ts';
 import { WorkerProcess } from './process.ts';
-import { SandboxCandidate, sandboxBackend } from '../sandbox/candidate.ts';
+import { SandboxCandidate, sandboxBackend, defaultCandidateBudget, type CandidateBudget } from '../sandbox/candidate.ts';
 import { sessionPath, sessionHistory, listSessions } from './sessions.ts';
 import { Session } from '../core/session.ts';
 import { RuntimeHistory } from '../core/runtime-records.ts';
@@ -41,7 +41,8 @@ export class Supervisor {
   private recovery?: Promise<void>;
   private readonly execution: ExecutionEnvironment;
   private readonly recoveryPolicy: RecoveryPolicy;
-  constructor(store: VersionStore, cwd: string, execution: ExecutionEnvironment = { kind: 'local' }, recoveryPolicy: RecoveryPolicy = {}) { this.recoveryPolicy = recoveryPolicy; this.execution = { ...execution }; this.store = store; this.cwd = realpathSync(cwd); this.socketPath = join(store.root, 'control.sock'); }
+  private readonly evaluationBudget: CandidateBudget | null;
+  constructor(store: VersionStore, cwd: string, execution: ExecutionEnvironment = { kind: 'local' }, recoveryPolicy: RecoveryPolicy = {}, evaluationBudget: CandidateBudget | null = defaultCandidateBudget) { this.evaluationBudget = evaluationBudget; this.recoveryPolicy = recoveryPolicy; this.execution = { ...execution }; this.store = store; this.cwd = realpathSync(cwd); this.socketPath = join(store.root, 'control.sock'); }
   private async startPrimary(version: Version, session = sessionPath(this.store.root, this.sessionId())): Promise<void> {
     const worker = new WorkerProcess(this.store, version, this.cwd, session, join(this.store.root, 'outputs'), 'primary',
       event => { if (this.primary === worker) this.activeRequest?.(event); },
@@ -152,6 +153,7 @@ export class Supervisor {
     if (this.closed || this.activeRequest || this.recovery || this.switching || this.store.state().phase !== 'running' || this.store.state().switch_target || !this.primary) throw new Error('Runtime is changing version or unavailable');
     if (this.primary.busy) throw new Error('A request is already running');
     let ended = false;
+    let completed = false;
     this.activeRequest = value => { if (value.type === 'end') ended = true; try { event(value); } catch {} };
     this.cancelled = false;
     try {
@@ -165,7 +167,16 @@ export class Supervisor {
           if (resume) await this.recoveryPolicy.beforeResume?.();
           if (this.closed || this.cancelled) throw new Error('Request cancelled');
           const answer = await (compact ? worker.compact() : worker.run(input, resume ? { userCountBefore } : undefined));
-          this.retries = 0; return answer;
+          if (this.closed || this.cancelled) throw new Error('Request cancelled');
+          if (worker.yielded) {
+            if (!this.store.state().switch_target) throw new Error('Worker yielded without a pending version switch');
+            await this.performSwitch();
+            if (this.closed || this.cancelled) throw new Error('Request cancelled');
+            if (this.store.state().phase !== 'running' || this.primary?.stopping) throw new Error('Version handover did not restore a running worker');
+            resume = true;
+            continue;
+          }
+          this.retries = 0; completed = true; return answer;
         } catch (error) {
           if (!worker.failure) throw error;
           if (this.cancelled || this.closed) {
@@ -180,14 +191,23 @@ export class Supervisor {
     } catch (error) {
       if (!ended) this.activeRequest?.({ type: 'end', status: this.cancelled ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Recovery failed' });
       throw error;
-    } finally { this.activeRequest = undefined; if (!this.closed && this.store.state().switch_target && !this.recovery) await this.performSwitch(); }
+    } finally {
+      this.activeRequest = undefined;
+      if (this.switchId && (!completed || this.closed || this.cancelled)) {
+        this.store.finishSwitch(this.switchId, false); this.switchId = undefined;
+      } else if (!this.closed && this.store.state().switch_target && !this.recovery) await this.performSwitch();
+    }
   }
   cancel(): void { this.cancelled = true; this.primary?.cancel(); this.candidate?.cancel(); }
   async select(target: string, kind = 'manual', reason = 'User selected version'): Promise<unknown> {
     if (this.recovery || this.switching || this.evaluationBusy) throw new Error('Runtime is busy changing or evaluating a version');
+    if (!this.activeRequest) this.cancelled = false;
     if (target === this.store.state().current_version) return { status: 'already_current', version: target };
     this.switchId = this.store.requestSwitch(target, kind, reason);
-    if (this.activeRequest || this.primary?.busy) return { status: 'pending', version: target };
+    if (this.activeRequest || this.primary?.busy) {
+      if (this.primary?.supportsYield) this.primary.send({ type: 'yield' });
+      return { status: 'pending', version: target };
+    }
     await this.performSwitch(); return { status: this.store.state().current_version === target ? 'completed' : 'failed', version: this.store.state().current_version };
   }
   private async performSwitch(): Promise<void> {
@@ -205,9 +225,9 @@ export class Supervisor {
         }
         try {
           if (this.closed) throw new Error('Supervisor is stopping');
-          if (attempt && this.cancelled) throw new Error('Recovery cancelled');
+          if (this.cancelled) throw new Error('Request cancelled');
           await this.startPrimary(this.store.version(target));
-          if (this.closed) throw new Error('Supervisor is stopping');
+          if (this.closed || this.cancelled) { await this.primary?.stop(); throw new Error('Request cancelled'); }
           this.store.finishSwitch(id, true); return;
         } catch (error) {
           const failed = this.primary!; await failed.stop();
@@ -216,7 +236,7 @@ export class Supervisor {
         }
       }
       this.store.finishSwitch(id, false);
-      if (this.closed) return;
+      if (this.closed || this.cancelled) { this.store.db.prepare("UPDATE runtime_state SET phase='stopped' WHERE id=1").run(); return; }
       if (this.recoveryPolicy.allowFallback === false) { this.store.db.prepare("UPDATE runtime_state SET phase='failed' WHERE id=1").run(); return; }
       try { await this.startPrimary(this.store.version(old)); } catch { this.store.db.prepare("UPDATE runtime_state SET phase='failed' WHERE id=1").run(); }
 
@@ -236,10 +256,10 @@ export class Supervisor {
       this.store.db.prepare("INSERT INTO evaluations(id,source_version,candidate_version,status,evidence_path) VALUES(?,?,?,'running',?)").run(id, source, version, evidence);
       const started = performance.now();
       const events: AgentEvent[] = []; let answer = ''; let status = 'failed'; let error: string | undefined;
-      const candidate = new SandboxCandidate(sandbox, target.runtime_path, join(dir, 'sandbox'), event => events.push(event));
+      const candidate = new SandboxCandidate(sandbox, target.runtime_path, join(dir, 'sandbox'), event => events.push(event), this.evaluationBudget);
       this.candidate = candidate;
       this.store.db.prepare("INSERT INTO instances(id,version_id,role,state) VALUES(?,?,'candidate','starting')").run(candidate.id, version);
-      const timeout = setTimeout(() => candidate.cancel(), 120_000);
+      const timeout = this.evaluationBudget === null ? undefined : setTimeout(() => candidate.cancel(), this.evaluationBudget.timeoutMs);
       try {
         await candidate.ready;
         this.store.db.prepare("UPDATE instances SET state='ready' WHERE id=?").run(candidate.id);

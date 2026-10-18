@@ -18,7 +18,7 @@ export function sandboxBackend(value: unknown): SandboxBackend {
 const directory = dirname(fileURLToPath(import.meta.url));
 const bridge = join(directory, 'bridge.mjs');
 const limit = 4 * 1024 * 1024;
-interface Launch { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; cleanup?: string[]; macCleanup?: string[]; timeoutMs: number; }
+interface Launch { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; cleanup?: string[]; macCleanup?: string[]; timeoutMs: number | null; maxOutputBytes?: number | null; }
 
 // The guardian owns backend handles and remains alive if the supervisor dies.
 class Execution {
@@ -93,6 +93,9 @@ const mount = (source: string, target: string, readonly = false) => {
   return `type=bind,src=${source},dst=${target}${readonly ? ',readonly' : ''}`;
 };
 
+export interface CandidateBudget { timeoutMs: number; maxModelCalls: number; }
+export const defaultCandidateBudget: CandidateBudget = { timeoutMs: 120_000, maxModelCalls: 64 };
+
 export class SandboxCandidate {
   readonly ready: Promise<void>;
   readonly id = randomUUID();
@@ -114,8 +117,9 @@ export class SandboxCandidate {
   readonly runtime: string;
   readonly work: string;
   private readonly event: (event: AgentEvent) => void;
-  constructor(backend: SandboxBackend, runtime: string, work: string, event: (event: AgentEvent) => void) {
-    this.backend = backend; this.runtime = runtime; this.work = work; this.event = event;
+  private readonly budget: CandidateBudget | null;
+  constructor(backend: SandboxBackend, runtime: string, work: string, event: (event: AgentEvent) => void, budget: CandidateBudget | null = defaultCandidateBudget) {
+    this.budget = budget; this.backend = backend; this.runtime = runtime; this.work = work; this.event = event;
     this.ready = new Promise((resolveReady, reject) => { this.readyResolve = resolveReady; this.readyReject = reject; });
     void this.ready.catch(() => {});
     this.initialized = this.initialize().catch(error => { this.fail(error); });
@@ -130,7 +134,7 @@ export class SandboxCandidate {
     const runtime = realpathSync(this.runtime); const work = realpathSync(this.work);
     const developerBins = process.platform === 'darwin' ? ['/Library/Developer/CommandLineTools/usr/bin', '/Applications/Xcode.app/Contents/Developer/usr/bin'].filter(path => existsSync(path)) : [];
     const env = { PATH: [join(runtime, 'node_modules/.bin'), dirname(process.execPath), ...developerBins, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'),
-      DEEPSEEK_API_KEY: 'sandbox-host-broker', DEEPSEEK_BASE_URL: 'https://sandbox.invalid', DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL ?? 'deepseek-flash', SEEDA_SYSTEM_PROXY: '0', SEEDA_THINKING: process.env.SEEDA_THINKING ?? '0' };
+      DEEPSEEK_API_KEY: 'sandbox-host-broker', DEEPSEEK_BASE_URL: 'https://sandbox.invalid', DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL ?? 'deepseek-flash', SEEDA_SYSTEM_PROXY: '0', SEEDA_THINKING: process.env.SEEDA_THINKING ?? '1' };
     let launch: Launch;
     if (this.backend === 'process') {
       if (process.platform === 'darwin') {
@@ -155,14 +159,14 @@ export class SandboxCandidate {
         { ...env, HOME: '/evaluation/home', TMPDIR: '/tmp', PATH: '/usr/local/bin:/usr/bin:/bin' });
     }
     if (this.stopped) throw new Error('Sandbox stopped');
-    this.execution = new Execution(launch, data => this.receive(data));
+    this.execution = new Execution({ ...launch, timeoutMs: this.budget?.timeoutMs ?? null, maxOutputBytes: this.budget === null ? null : 16 * 1024 * 1024 }, data => this.receive(data));
     this.startup = setTimeout(() => this.fail(new Error('Sandbox worker startup timed out')), 15000);
     void this.execution.done.then(() => { if (!this.stopped) this.fail(new Error('Sandbox exited before completing evaluation')); }, error => this.fail(error));
   }
   private receive(data: Buffer): void {
     try {
       this.bytes += data.length; this.buffer += this.decoder.write(data);
-      if (this.bytes > 16 * 1024 * 1024 || this.buffer.length > 8 * 1024 * 1024) throw new Error('Sandbox output limit exceeded');
+      if ((this.budget !== null && this.bytes > 16 * 1024 * 1024) || this.buffer.length > 8 * 1024 * 1024) throw new Error('Sandbox output limit exceeded');
       let index: number;
       while ((index = this.buffer.indexOf('\n')) !== -1) {
         const message = JSON.parse(this.buffer.slice(0, index)); this.buffer = this.buffer.slice(index + 1);
@@ -179,7 +183,7 @@ export class SandboxCandidate {
     } catch { this.fail(new Error('Invalid or oversized sandbox output')); }
   }
   private async model(message: { id: unknown; body: unknown }): Promise<void> {
-    if (this.modelBusy || ++this.calls > 64 || !Number.isSafeInteger(message.id) || typeof message.body !== 'string' || Buffer.byteLength(message.body) > limit) {
+    if (this.modelBusy || (this.budget !== null && ++this.calls > this.budget.maxModelCalls) || !Number.isSafeInteger(message.id) || typeof message.body !== 'string' || Buffer.byteLength(message.body) > limit) {
       this.fail(new Error('Sandbox model request limit exceeded')); return;
     }
     this.modelBusy = true;

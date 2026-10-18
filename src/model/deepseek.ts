@@ -51,6 +51,7 @@ export interface DeepSeekOptions {
   baseUrl?: string;
   model?: string;
   thinking?: boolean;
+  reasoningEffort?: 'low' | 'high' | 'max';
   maxTokens?: number;
   timeoutMs?: number;
   retry?: RetryOptions;
@@ -59,9 +60,13 @@ export class DeepSeekModel implements Model {
   static fromEnvironment(onRetry?: RetryOptions['onRetry']): DeepSeekModel {
     return new DeepSeekModel({ apiKey: process.env.DEEPSEEK_API_KEY ?? '',
       baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL,
-      thinking: process.env.SEEDA_THINKING === '1', retry: { onRetry } });
+      thinking: process.env.SEEDA_THINKING !== '0', retry: { onRetry } });
   }
-  get maxOutputTokens(): number { return this.options.maxTokens ?? 4096; }
+  get maxOutputTokens(): number {
+    if (this.options.maxTokens !== undefined) return this.options.maxTokens;
+    if (this.options.thinking === false) return 8192;
+    return (this.options.reasoningEffort ?? 'max') === 'max' ? 131072 : 65536;
+  }
   private readonly options: DeepSeekOptions;
   constructor(options: DeepSeekOptions) {
     if (!options.apiKey) throw new Error('DEEPSEEK_API_KEY is required');
@@ -87,10 +92,10 @@ export class DeepSeekModel implements Model {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.apiKey}` },
       body: JSON.stringify({
         model: this.options.model ?? 'deepseek-flash', messages, stream: true,
-        max_tokens: this.options.maxTokens ?? 4096,
+        max_tokens: this.maxOutputTokens,
         stream_options: { include_usage: true },
-        thinking: { type: this.options.thinking ? 'enabled' : 'disabled' },
-        ...(this.options.thinking ? { reasoning_effort: 'high' } : {}),
+        thinking: { type: this.options.thinking === false ? 'disabled' : 'enabled' },
+        ...(this.options.thinking === false ? {} : { reasoning_effort: this.options.reasoningEffort ?? 'max' }),
         ...(tools.length ? { tools } : {}),
       }),
       signal: requestSignal,

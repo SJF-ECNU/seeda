@@ -61,7 +61,8 @@ process.on('message', message => {
   for (const [name, stream] of [['stdout', child.stdout], ['stderr', child.stderr]]) {
     stream.on('data', data => {
       bytes += data.length;
-      if (bytes > 16 * 1024 * 1024) { send({ type: 'failure', error: 'Sandbox output limit exceeded' }); void stop(); }
+      const maxOutputBytes = config.maxOutputBytes === undefined ? 16 * 1024 * 1024 : config.maxOutputBytes;
+      if (maxOutputBytes !== null && bytes > maxOutputBytes) { send({ type: 'failure', error: 'Sandbox output limit exceeded' }); void stop(); }
       else if (config.macCleanup && name === 'stdout') {
         verification ??= macCleanup(['--verify', String(child.pid), ...config.macCleanup]).then(valid => {
           if (valid) child.stdin.write('{"type":"sandbox_verified"}\n');
@@ -76,5 +77,5 @@ process.on('message', message => {
   }
   child.on('error', () => { send({ type: 'failure', error: 'Sandbox backend could not start; check its installation and permissions' }); void stop(); });
   child.on(config.macCleanup ? 'exit' : 'close', (code, signal) => { send({ type: 'exit', code, signal }); void stop(); });
-  setTimeout(() => { send({ type: 'failure', error: 'Sandbox execution timed out' }); void stop(); }, config.timeoutMs).unref();
+  if (config.timeoutMs !== null) setTimeout(() => { send({ type: 'failure', error: 'Sandbox execution timed out' }); void stop(); }, config.timeoutMs).unref();
 });

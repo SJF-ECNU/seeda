@@ -7,6 +7,7 @@ import { Agent } from '../src/core/agent.ts';
 import { Session } from '../src/core/session.ts';
 import { compactContext, estimateContextTokens, projectInstructions } from '../src/core/context.ts';
 import { RuntimeRecordsTool } from '../src/core/runtime-records-tool.ts';
+import { SkillTool } from '../src/core/skill-tool.ts';
 import type { Message, Model } from '../src/core/types.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
@@ -23,14 +24,14 @@ function scriptedModel(onSummary?: (messages: Message[]) => void): Model {
 }
 
 test('Agent triggers at 85 percent before full capacity and stays idle below it', async t => {
-  for (const [targetTokens, expected] of [[1600, 0], [1800, 1]]) {
+  for (const [targetTokens, expected] of [[8000, 0], [9000, 1]]) {
     const { cwd, session } = await fixture(t); let summaries = 0; const events: string[] = [];
-    const system = await projectInstructions(cwd), definitions = [new RuntimeRecordsTool(session, []).definition];
+    const system = await projectInstructions(cwd), definitions = [new SkillTool().definition, new RuntimeRecordsTool(session, ['read_skill']).definition];
     const base = estimateContextTokens(system, [{ role: 'user', content: '' }, { role: 'assistant', content: 'old result' }, { role: 'user', content: 'continue' }], definitions);
     const length = Math.max(0, (targetTokens - base) * 3);
     await session.add({ role: 'user', content: 'x'.repeat(length) });
     await session.add({ role: 'assistant', content: 'old result' });
-    const agent = new Agent({ cwd, session, artifactDir: cwd, tools: [], maxContextTokens: 2000,
+    const agent = new Agent({ cwd, session, artifactDir: cwd, tools: [], maxContextTokens: 10000,
       model: scriptedModel(() => summaries++), onEvent: event => events.push(event.type) });
     assert.equal(await agent.run('continue'), 'continued');
     assert.equal(summaries > 0, expected > 0); assert.equal(events.includes('compacted'), expected > 0);

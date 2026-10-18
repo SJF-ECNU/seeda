@@ -38,11 +38,12 @@ test('environment construction captures model settings and preserves retry notif
  const address = http.address(); assert.ok(address && typeof address !== 'string');
  Object.assign(process.env, { DEEPSEEK_API_KEY: 'fixture-key', DEEPSEEK_BASE_URL: `http://127.0.0.1:${address.port}`, DEEPSEEK_MODEL: 'fixture-model', SEEDA_THINKING: '1' });
  const retries: number[] = [];
+ delete process.env.SEEDA_THINKING;
  const model = DeepSeekModel.fromEnvironment(info => retries.push(info.attempt));
  process.env.DEEPSEEK_API_KEY = 'changed-after-construction'; process.env.DEEPSEEK_MODEL = 'changed';
  assert.equal((await model.complete([], [], new AbortController().signal)).message.content, 'ok');
  assert.equal(retries.length, 1); assert.equal(bodies.length, 2);
- for (const body of bodies) { assert.equal(body.model, 'fixture-model'); assert.deepEqual(body.thinking, { type: 'enabled' }); }
+ for (const body of bodies) { assert.equal(body.model, 'fixture-model'); assert.deepEqual(body.thinking, { type: 'enabled' }); assert.equal(body.reasoning_effort, 'max'); assert.equal(body.max_tokens, 131072); }
  assert.deepEqual(authorizations, ['Bearer fixture-key', 'Bearer fixture-key']);
  delete process.env.DEEPSEEK_API_KEY;
  assert.throws(() => DeepSeekModel.fromEnvironment(), /DEEPSEEK_API_KEY is required/);

@@ -2,6 +2,8 @@ import type { AgentEvent, ExecutionFailure, Model, Tool, ToolCall } from './type
 import { executionFailure, toolFailure } from './runtime-records.ts';
 import { Session } from './session.ts';
 import { RuntimeRecordsTool } from './runtime-records-tool.ts';
+import { SkillTool } from './skill-tool.ts';
+import { VerificationTool } from '../tools/verification.ts';
 import { compactContext, contextSize, ContextTokens, estimateContextTokens, loadInstructions } from './context.ts';
 
 export interface AgentOptions {
@@ -13,6 +15,7 @@ export interface AgentOptions {
   maxContextChars?: number;
   maxContextTokens?: number;
   onEvent?: (event: AgentEvent) => void;
+  shouldYield?: () => boolean;
 }
 export class Agent {
   private readonly options: AgentOptions;
@@ -22,7 +25,11 @@ export class Agent {
   private get inputBudget(): number { return this.options.maxContextChars ?? Math.max(1, this.contextLimit - (this.options.model.maxOutputTokens ?? 4096)); }
   private get compactThreshold(): number { return Math.min(this.inputBudget, Math.floor((this.options.maxContextChars ?? this.contextLimit) * 0.85)); }
   constructor(options: AgentOptions) {
-    const tools = [...options.tools, new RuntimeRecordsTool(options.session, options.tools.map(tool => tool.definition.function.name))];
+    const tools = [...options.tools];
+    const bash = tools.find(tool => tool.definition.function.name === 'bash');
+    if (bash && !tools.some(tool => tool.definition.function.name === 'verify')) tools.push(new VerificationTool(bash));
+    if (!tools.some(tool => tool.definition.function.name === 'read_skill')) tools.push(new SkillTool());
+    if (!tools.some(tool => tool.definition.function.name === 'runtime_records')) tools.push(new RuntimeRecordsTool(options.session, tools.map(tool => tool.definition.function.name)));
     const original = options.model;
     const model: Model = { maxOutputTokens: original.maxOutputTokens, async complete(...args) {
       const started = performance.now();
@@ -81,7 +88,8 @@ export class Agent {
       await session.recordInstructions(instructions.sources);
       if (!resume || session.messages.filter(message => message.role === 'user').length <= resume.userCountBefore) await session.add({ role: 'user', content: input });
       const previous = session.runtime.recent(2).at(-2);
-      const system = instructions.text + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '');
+      const system = instructions.text + (previous ? `\nPrevious request ended: ${previous.status}${previous.reason ? ' (' + previous.reason + ')' : ''}. runtime_records can inspect your own execution facts.\n` : '')
+        + (resume && previous && previous.implementationVersion !== process.env.SEEDA_VERSION ? `\nRuntime version switch facts: previous=${previous.implementationVersion}, current=${process.env.SEEDA_VERSION}. Continue the same task from recorded tool results; do not replay completed actions.\n` : '');
       while (true) {
         controller.signal.throwIfAborted();
         stage = 'model';
@@ -135,6 +143,11 @@ export class Agent {
           stage = 'runtime';
         }
         controller.signal.throwIfAborted();
+        if (this.options.shouldYield?.()) {
+          if (!session.runtime.recordingComplete) throw new Error('Cannot hand over with incomplete execution records');
+          await session.end('yielded');
+          return '';
+        }
       }
     } catch (error) {
       const status = controller.signal.aborted ? 'cancelled' : 'failed';

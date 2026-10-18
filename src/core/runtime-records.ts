@@ -1,7 +1,7 @@
 import type { ExecutionFailure, Usage } from './types.ts';
 
 export interface InstructionSource {
-  kind: 'self_instructions' | 'self_memory' | 'project_rules' | 'project_skill';
+  kind: 'self_instructions' | 'self_memory' | 'project_rules' | 'self_skill' | 'project_skill';
   path: string;
   loaded: boolean;
   characters: number;

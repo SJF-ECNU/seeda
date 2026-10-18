@@ -44,9 +44,31 @@ test('native HTTP adapter reassembles multiple indexed calls and retains reasoni
   const result = await model.complete([{ role: 'assistant', content: 'prior', reasoning_content: 'preserved' }], [], new AbortController().signal, s => { text += s; });
   assert.equal(request.model, 'deepseek-flash'); assert.equal(request.messages[0].reasoning_content, 'preserved');
   assert.equal(request.thinking.type, 'enabled');
+  assert.equal(request.reasoning_effort, 'max');
   assert.equal(result.message.reasoning_content, 'reason'); assert.equal(text, '检查');
   assert.deepEqual(result.message.tool_calls!.map(c => c.id), ['a', 'b']);
   assert.equal(JSON.parse(result.message.tool_calls![1].function.arguments).command, 'ls');
+});
+
+test('default maximum thinking and explicit candidate overrides reach HTTP unchanged', async t => {
+  const bodies: any[] = [];
+  const baseUrl = await server(t, async (req, res) => {
+    let body = ''; for await (const part of req) body += part;
+    bodies.push(JSON.parse(body));
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end(frame({ content: 'ok' }, 'stop') + 'data: [DONE]\n\n');
+  });
+  const defaults = new DeepSeekModel({ baseUrl, apiKey: 'test-only' });
+  await defaults.complete([], [], new AbortController().signal);
+  assert.deepEqual(bodies[0].thinking, { type: 'enabled' });
+  assert.equal(bodies[0].reasoning_effort, 'max');
+  assert.equal(bodies[0].max_tokens, 131072);
+  assert.equal(defaults.maxOutputTokens, bodies[0].max_tokens);
+  await new DeepSeekModel({ baseUrl, apiKey: 'test-only', reasoningEffort: 'low', maxTokens: 2048 }).complete([], [], new AbortController().signal);
+  assert.equal(bodies[1].reasoning_effort, 'low'); assert.equal(bodies[1].max_tokens, 2048);
+  await new DeepSeekModel({ baseUrl, apiKey: 'test-only', thinking: false }).complete([], [], new AbortController().signal);
+  assert.deepEqual(bodies[2].thinking, { type: 'disabled' });
+  assert.equal(bodies[2].reasoning_effort, undefined); assert.equal(bodies[2].max_tokens, 8192);
 });
 
 test('interrupted stream rejects even if an apparent finish event was received', async t => {
