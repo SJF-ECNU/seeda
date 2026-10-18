@@ -214,3 +214,6 @@ Supervisor复用现有performSwitch和resume，先停止旧session写者再启�
 本功能是worker的同任务接替，不会替换已经运行的Supervisor宿主模块，完整宿主代码变更仍按上述进程生命周期边界验证。历史ALE阶段runner保留用于复现；日常自主工作使用原生Supervisor入口，不叠加其阶段限制。
 
 最小方案及验证清单：[[openspec/changes/unified-work-self-evolution/design]]；证据汇总见`.seeda/validation/unified-work-evolution/report.md`。正式实验保持停止，未发布或改变默认种系。
+
+## 单循环发布状态（2026-10-18）
+源码`595aaf9`已推送main；本机默认`seeda-agent-single-loop`，ID`b32368bb-0ff8-4275-882d-2a92d49c6cff`，种系Git`5e92bad214c28e9f2417da59e14f8633e04d05ae`。配套宿主`/Users/shjf/.local/share/seeda/releases/single-loop-595aaf99a40d`。此前工作树“未发布”描述为历史状态；本次必要依赖已发布，现有运行项目不自动迁移。干净源码51项相关测试、发布安装12项完整路径及实际CLI默认/截断/崩溃恢复通过。Docker失联导致官方评分准备首停，正式实验尚未启动；不将评分阻塞记为能力0分。证据`.seeda/validation/single-loop-release/receipt.json`。
