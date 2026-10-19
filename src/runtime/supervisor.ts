@@ -16,6 +16,7 @@ import { RuntimeHistory } from '../core/runtime-records.ts';
 
 export interface RecoveryPolicy {
   allowFallback?: boolean;
+  candidateCommand?: import('../tools/command.ts').CommandExecutor;
   // The owner retains its existing deadline and accounting; rejection stops recovery.
   beforeResume?: () => Promise<void> | void;
   executeCommand?: typeof executeManagedCommand;
@@ -257,7 +258,7 @@ export class Supervisor {
       this.store.db.prepare("INSERT INTO evaluations(id,source_version,candidate_version,status,evidence_path) VALUES(?,?,?,'running',?)").run(id, source, version, evidence);
       const started = performance.now();
       const events: AgentEvent[] = []; let answer = ''; let status = 'failed'; let error: string | undefined;
-      const candidate = new SandboxCandidate(sandbox, target.runtime_path, join(dir, 'sandbox'), event => events.push(event), this.evaluationBudget);
+      const candidate = new SandboxCandidate(sandbox, target.runtime_path, join(dir, 'sandbox'), event => events.push(event), this.evaluationBudget, this.recoveryPolicy.candidateCommand);
       this.candidate = candidate;
       this.store.db.prepare("INSERT INTO instances(id,version_id,role,state) VALUES(?,?,'candidate','starting')").run(candidate.id, version);
       const timeout = this.evaluationBudget === null ? undefined : setTimeout(() => candidate.cancel(), this.evaluationBudget.timeoutMs);

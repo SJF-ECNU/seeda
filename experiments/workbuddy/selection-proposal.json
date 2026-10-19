@@ -1,0 +1,437 @@
+{
+  "status": "proposal_with_preparation_blockers",
+  "selection_basis": "Only public task.toml and instruction.md for all work/heldout; no tests or solution read for them. No execution performed.",
+  "subsets": {
+    "code": {
+      "reason": "真实库功能扩展与可靠性修复，留出连接释放生命周期，均hard，复用测试/验证经验而非项目补丁。",
+      "work": [
+        {
+          "id": "reliability-hard-ack_after_success",
+          "metadata": {
+            "source_case": "reliability-hard-ack_after_success",
+            "difficulty": "hard",
+            "category": "reliability",
+            "subcategory": "task-ack-retry-ordering",
+            "tags": [
+              "celery",
+              "worker",
+              "ack",
+              "reliability"
+            ],
+            "repo": "celery/celery",
+            "commit": "0000000000000000000000000000000000000000",
+            "source_commit": "",
+            "pr_url": "",
+            "n_files_changed": 1,
+            "n_lines_changed": 9,
+            "instruction_clarity": "medium",
+            "solution_space": "medium",
+            "intent": "reliability",
+            "artifact_type": "product_code",
+            "role": "ops",
+            "edit_mode": "modify_existing",
+            "complexity": "L5",
+            "surface": "partial_repo",
+            "verification_mode": "functional_tests",
+            "retrofit_action": "v1.0-ext",
+            "taxonomy_status": "experimental",
+            "target_language": "python",
+            "source_language": "python",
+            "entrypoint": "python",
+            "task-type": [
+              "reliability"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/reliability-hard-ack_after_success/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/reliability-hard-ack_after_success/task.toml"
+        },
+        {
+          "id": "feature-hard-fallback_signers_and_switch",
+          "metadata": {
+            "source_case": "feature-hard-fallback_signers_and_switch",
+            "difficulty": "hard",
+            "category": "feature",
+            "subcategory": "parsing-serialization-and-codecs",
+            "tags": [
+              "signing",
+              "fallback-signers",
+              "algorithm-migration",
+              "token-compatibility"
+            ],
+            "repo": "itsdangerous",
+            "commit": "2ef8fe08c159de9f1232dbab86f8606aecd6392b",
+            "source_commit": "f966a62e4c0031b885566b529cc33fe9f6ae9f18",
+            "pr_url": "",
+            "n_files_changed": 3,
+            "n_lines_changed": 45,
+            "instruction_clarity": "high",
+            "solution_space": "constrained",
+            "intent": "implement",
+            "artifact_type": "product_code",
+            "role": "developer",
+            "edit_mode": "patch_heavy",
+            "complexity": "L3",
+            "surface": "multi_file",
+            "verification_mode": "unit",
+            "retrofit_action": "keep-shape",
+            "taxonomy_status": "aligned",
+            "domain": "parser",
+            "task-type": [
+              "general"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/feature-hard-fallback_signers_and_switch/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/feature-hard-fallback_signers_and_switch/task.toml"
+        }
+      ],
+      "heldout": [
+        {
+          "id": "reliability-hard-stream_release",
+          "metadata": {
+            "source_case": "reliability-hard-stream_release",
+            "difficulty": "hard",
+            "category": "reliability",
+            "subcategory": "stream-response-release",
+            "tags": [
+              "aiohttp",
+              "stream",
+              "connection-pool",
+              "reliability"
+            ],
+            "repo": "aio-libs/aiohttp",
+            "commit": "0000000000000000000000000000000000000000",
+            "source_commit": "",
+            "pr_url": "",
+            "n_files_changed": 1,
+            "n_lines_changed": 38,
+            "instruction_clarity": "medium",
+            "solution_space": "medium",
+            "intent": "reliability",
+            "artifact_type": "product_code",
+            "role": "ops",
+            "edit_mode": "modify_existing",
+            "complexity": "L5",
+            "surface": "partial_repo",
+            "verification_mode": "functional_tests",
+            "retrofit_action": "v1.0-ext",
+            "taxonomy_status": "experimental",
+            "target_language": "python",
+            "source_language": "python",
+            "entrypoint": "python",
+            "task-type": [
+              "reliability"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/reliability-hard-stream_release/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/reliability-hard-stream_release/task.toml"
+        }
+      ],
+      "preparation": [
+        {
+          "id": "bug_fix-medium-permission_error_skip_continue",
+          "metadata": {
+            "source_case": "bug_fix-medium-permission_error_skip_continue",
+            "difficulty": "medium",
+            "category": "bug-fix",
+            "subcategory": "filesystem-and-runtime",
+            "tags": [
+              "file-copy",
+              "permissions",
+              "warning-only",
+              "readonly-fs"
+            ],
+            "repo": "copier",
+            "commit": "e82ac24273784fe603a798f94fa41943013fef78",
+            "source_commit": "de88305564e99a698289ba2e108edf410f85bb78",
+            "pr_url": "",
+            "n_files_changed": 1,
+            "n_lines_changed": 16,
+            "instruction_clarity": "high",
+            "solution_space": "constrained",
+            "intent": "debug",
+            "artifact_type": "mixed",
+            "role": "ops",
+            "edit_mode": "patch_light",
+            "complexity": "L2",
+            "surface": "single_file",
+            "verification_mode": "unit",
+            "retrofit_action": "keep-shape",
+            "taxonomy_status": "aligned",
+            "domain": "runtime",
+            "task-type": [
+              "wrong_diagnosis"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/bug_fix-medium-permission_error_skip_continue/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-code-v1.0/tasks/bug_fix-medium-permission_error_skip_continue/task.toml"
+        }
+      ]
+    },
+    "web": {
+      "reason": "工作覆盖交互工作流和数据可视化，留出状态恢复；保留官方视觉/功能/VLM全评分。",
+      "work": [
+        {
+          "id": "csv-import-mapping-wizard-L4-037",
+          "metadata": {
+            "difficulty": "hard",
+            "category": "page-interaction",
+            "tags": [
+              "web"
+            ],
+            "source_case": "T37",
+            "workbuddy_difficulty": "L4",
+            "task_mode": "From Scratch",
+            "interaction_state_complexity": "Multi-step Workflow",
+            "entrypoint": "/workspace/www/index.html"
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/csv-import-mapping-wizard-L4-037/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/csv-import-mapping-wizard-L4-037/task.toml"
+        },
+        {
+          "id": "cohort-retention-dashboard-L4-054",
+          "metadata": {
+            "difficulty": "hard",
+            "category": "data-visualization",
+            "tags": [
+              "web"
+            ],
+            "source_case": "T54",
+            "workbuddy_difficulty": "L4",
+            "task_mode": "From Scratch",
+            "interaction_state_complexity": "Single-flow State",
+            "entrypoint": "/workspace/submission/chart.html"
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/cohort-retention-dashboard-L4-054/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/cohort-retention-dashboard-L4-054/task.toml"
+        }
+      ],
+      "heldout": [
+        {
+          "id": "blog-editor-draft-recovery-L4-059",
+          "metadata": {
+            "difficulty": "hard",
+            "category": "page-interaction",
+            "tags": [
+              "web"
+            ],
+            "source_case": "T59",
+            "workbuddy_difficulty": "L4",
+            "task_mode": "Bug Fix",
+            "interaction_state_complexity": "Persistence/Offline/Cross-state",
+            "entrypoint": "/workspace/www/index.html"
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/blog-editor-draft-recovery-L4-059/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/blog-editor-draft-recovery-L4-059/task.toml"
+        }
+      ],
+      "preparation": [
+        {
+          "id": "design-token-component-board-L2-045",
+          "metadata": {
+            "difficulty": "easy",
+            "category": "visual-design",
+            "tags": [
+              "web"
+            ],
+            "source_case": "T45",
+            "workbuddy_difficulty": "L2",
+            "task_mode": "From Scratch",
+            "interaction_state_complexity": "No Interaction",
+            "entrypoint": "/workspace/www/index.html"
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/design-token-component-board-L2-045/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-web-v1.0/tasks/design-token-component-board-L2-045/task.toml"
+        }
+      ]
+    },
+    "office": {
+      "reason": "工作覆盖多文件状态迁移与xlsx对账，留出更难的规则时态重建。",
+      "work": [
+        {
+          "id": "cross-week-dashboard-migration",
+          "metadata": {
+            "source_case": "cross-week-dashboard-migration",
+            "difficulty": "hard",
+            "category": "doc-ops",
+            "tags": [
+              "doc-ops",
+              "text-only-judge"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/cross-week-dashboard-migration/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/cross-week-dashboard-migration/task.toml"
+        },
+        {
+          "id": "subscription-credit-reconcile-L4-024",
+          "metadata": {
+            "source_case": "subscription-credit-reconcile-L4-024",
+            "difficulty": "medium",
+            "category": "data-file-ops",
+            "tags": [
+              "data-file-ops",
+              "wb-v1.0-hardpack",
+              "merge-reconcile"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/subscription-credit-reconcile-L4-024/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/subscription-credit-reconcile-L4-024/task.toml"
+        }
+      ],
+      "heldout": [
+        {
+          "id": "effective-control-state-L5-036",
+          "metadata": {
+            "source_case": "effective-control-state-L5-036",
+            "difficulty": "hard",
+            "category": "doc-ops",
+            "tags": [
+              "doc-ops",
+              "wb-v1.0-hardpack",
+              "control-state",
+              "l5-successor-candidate"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/effective-control-state-L5-036/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/effective-control-state-L5-036/task.toml"
+        }
+      ],
+      "preparation": [
+        {
+          "id": "ticket-weekly-L3-010",
+          "metadata": {
+            "source_case": "ticket-weekly-L3-010",
+            "difficulty": "easy",
+            "category": "data-file-ops",
+            "tags": [
+              "data-file-ops"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/ticket-weekly-L3-010/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-office-v1.0/tasks/ticket-weekly-L3-010/task.toml"
+        }
+      ]
+    },
+    "security": {
+      "reason": "只做SQLite日志防御分析和规则生成，工作Linux与Windows侧载，留出另一proxy链；不运行样本、不提权。",
+      "work": [
+        {
+          "id": "linux-ld-preload-rule-gen",
+          "metadata": {
+            "category": "security-operation",
+            "subcategory": "alert-rule-generation",
+            "difficulty": "hard",
+            "source": "EDR analysis capture",
+            "tags": [
+              "log-triage",
+              "soc",
+              "edr",
+              "ocsf",
+              "sqlite",
+              "linux",
+              "detection-engineering",
+              "alert-rule-generation"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/linux-ld-preload-rule-gen/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/linux-ld-preload-rule-gen/task.toml"
+        },
+        {
+          "id": "windows-dll-sideload-investigation",
+          "metadata": {
+            "category": "security-operation",
+            "subcategory": "windows-attack-investigation",
+            "difficulty": "hard",
+            "source": "EDR analysis capture",
+            "tags": [
+              "log-triage",
+              "soc",
+              "edr",
+              "ocsf",
+              "sqlite",
+              "windows",
+              "attack-attribution",
+              "merged"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/windows-dll-sideload-investigation/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/windows-dll-sideload-investigation/task.toml"
+        }
+      ],
+      "heldout": [
+        {
+          "id": "windows-dll-proxy-investigation",
+          "metadata": {
+            "category": "security-operation",
+            "subcategory": "windows-attack-investigation",
+            "difficulty": "hard",
+            "source": "EDR analysis capture",
+            "tags": [
+              "log-triage",
+              "soc",
+              "edr",
+              "ocsf",
+              "sqlite",
+              "windows",
+              "attack-investigation",
+              "a2"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/windows-dll-proxy-investigation/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/windows-dll-proxy-investigation/task.toml"
+        }
+      ],
+      "preparation": [
+        {
+          "id": "linux-ld-preload-investigation",
+          "metadata": {
+            "category": "security-operation",
+            "subcategory": "linux-attack-investigation",
+            "difficulty": "easy",
+            "source": "EDR analysis capture",
+            "tags": [
+              "log-triage",
+              "soc",
+              "edr",
+              "ocsf",
+              "sqlite",
+              "linux",
+              "attack-attribution",
+              "merged"
+            ]
+          },
+          "instruction_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/linux-ld-preload-investigation/instruction.md",
+          "task_metadata_path": "/Users/shjf/work/workbuddy-seeda-evolution/upstream/datasets/wb-bench-sec-v1.0/tasks/linux-ld-preload-investigation/task.toml"
+        }
+      ]
+    }
+  },
+  "preparation_notes": {
+    "code": {
+      "oracle_solution_present": true,
+      "oracle": "solution/solve.sh git-applies local patch; expected automatic but not executed/scored",
+      "docker_dependencies": "python3.12-slim; amd64 Node20.18.1; pip editable copier+pytest9/cov/xdist/pexpect/inline-snapshot"
+    },
+    "web": {
+      "oracle_solution_present": false,
+      "blocker": "No provided solution in downloaded task; must author isolated control artifact and run official full scoring, including VLM; cannot assert oracle full score",
+      "docker_dependencies": "python3.12-slim; amd64 Node20.18.1; Playwright Chromium systemdeps; bs4/lxml/openpyxl/Pillow/docx"
+    },
+    "office": {
+      "oracle_solution_present": false,
+      "blocker": "No provided solution in downloaded task; independently derive reference workbook from public inputs, then official scoring; no fullscore claim yet",
+      "docker_dependencies": "python3.12-slim; amd64 Node20.18.1; pytest8.3.4/openpyxl/pandas/pyyaml"
+    },
+    "security": {
+      "oracle_solution_present": true,
+      "blocked_alternative": "yara-detect-cryptominer",
+      "reason": "radare base registry and mirror unavailable; failure retained. Use existing Python defensive telemetry preparation.",
+      "data_overlap": "Preparation telemetry shares Linux family with one work item. Reference and data are never passed to real learner or version assets; only scripted control and external official scorer. Heldout Windows proxy family remains disjoint.",
+      "oracle": "supplied official solution, actual dataset SQLite must exist and verifier must execute"
+    }
+  },
+  "isolation": {
+    "heldout": "Never expose heldout instructions/assets/tests/solution/score to learning; standalone fresh environment both fixed versions; selected controller may read public instruction for routing only",
+    "preparation": "Never expose control solution/output/scorer to formal Agent",
+    "security_data_overlap": "Selected work Linux and Windows sideload and heldout Windows proxy are distinct telemetry families. Avoid selecting investigation/rule pair on same trace across work and heldout."
+  }
+}

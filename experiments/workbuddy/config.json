@@ -1,0 +1,31 @@
+{
+  "model": "deepseek-flash",
+  "thinking": "enabled",
+  "reasoning_effort": "max",
+  "judge_model": "qwen3-vl-plus",
+  "judge_identity_note": "Explicit research judge override; official rubrics and verifier code unchanged. Not claiming official leaderboard comparability to Kimi default.",
+  "task_order": "round-robin: code, web, office, security; two work tasks each",
+  "heldout": "initial and final fixed versions, fresh independent environments; scores never fed back",
+  "attempts_per_task": 1,
+  "timeout_multiplier": 2.0,
+  "budgets": {
+    "provider_attempts": null,
+    "tokens": null,
+    "usd": null,
+    "run_seconds": null
+  },
+  "seed_source": "/Users/shjf/work/workbuddy-seeda-evolution/preparation/native-capability-repair/seed",
+  "upstream_commit": "625b2233093ae4f23e76be28c1f341d41cc70373",
+  "selection_path": "selection-proposal.json",
+  "preparation_evidence": "preparation/readiness.json",
+  "prior_records": [
+    "/Users/shjf/work/swe-pro-evolution/runs/1019-172552/cost-rollup.json",
+    "/Users/shjf/work/workbuddy-seeda-evolution/preparation/cost-rollup-at-pause.json"
+  ],
+  "error_policy": "Recoverable task/tool/candidate errors return to Agent; execution/official judge infrastructure/model transport/unknown usage stops, preserving all records without filling unresolved scores with zero.",
+  "network": "Custom owned Docker attachment adapter: learner offline, verifier original public/no-network; exact per-trial CID only. No global Docker changes. No untrusted host socket access.",
+  "interpretation": "Pilot self-evolution research, not a full benchmark ranking or independent causal proof. Preparation fixtures are not autonomous improvements. Current supervisor is not hot-replaced.",
+  "configuration_role": "Recorded manifest of the fixed runner constants; selected task metadata supplies per-task limits. No model budget fields are enforced.",
+  "network_cleanup": "Stopped containers retained; only exact trial-owned unused Docker networks released with inspect records to avoid address-pool exhaustion.",
+  "native_evaluation": "Candidate code remains process-sandboxed. Owner-bound Bash runs in a separate offline same-image nonroot container with no mounts/scoring; no official project is shared. Missing capability or transport/unknown usage stops."
+}

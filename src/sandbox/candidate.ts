@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { configureNetwork } from '../model/network.ts';
+import type { CommandExecutor } from '../tools/command.ts';
 import type { AgentEvent } from '../core/types.ts';
 
 export type SandboxBackend = 'process' | 'container';
@@ -120,8 +121,9 @@ export class SandboxCandidate {
   readonly work: string;
   private readonly event: (event: AgentEvent) => void;
   private readonly budget: CandidateBudget | null;
-  constructor(backend: SandboxBackend, runtime: string, work: string, event: (event: AgentEvent) => void, budget: CandidateBudget | null = defaultCandidateBudget) {
-    this.budget = budget; this.backend = backend; this.runtime = runtime; this.work = work; this.event = event;
+  private readonly command?: CommandExecutor;
+  constructor(backend: SandboxBackend, runtime: string, work: string, event: (event: AgentEvent) => void, budget: CandidateBudget | null = defaultCandidateBudget, command?: CommandExecutor) {
+    this.command = command; this.budget = budget; this.backend = backend; this.runtime = runtime; this.work = work; this.event = event;
     this.ready = new Promise((resolveReady, reject) => { this.readyResolve = resolveReady; this.readyReject = reject; });
     void this.ready.catch(() => {});
     this.initialized = this.initialize().catch(error => { this.fail(error); });
@@ -131,12 +133,13 @@ export class SandboxCandidate {
     void this.stop().catch(() => {});
   }
   private async initialize(): Promise<void> {
-    for (const name of ['workspace', 'outputs', 'home', 'tmp']) await mkdir(join(this.work, name), { recursive: true, mode: 0o700 });
+    for (const name of ['workspace', 'workspace/.seeda-tmp', 'outputs', 'home', 'tmp']) await mkdir(join(this.work, name), { recursive: true, mode: 0o700 });
     if (this.stopped) throw new Error('Sandbox cancelled before startup');
     const runtime = realpathSync(this.runtime); const work = realpathSync(this.work);
     const developerBins = process.platform === 'darwin' ? ['/Library/Developer/CommandLineTools/usr/bin', '/Applications/Xcode.app/Contents/Developer/usr/bin'].filter(path => existsSync(path)) : [];
-    const env = { ...(process.platform === 'darwin' ? { SEEDA_SEMAPHORE_PREFIX: '/sd-' + randomUUID().replaceAll('-', '').slice(0, 16), PYTHONPATH: join(directory, 'python'), PYTHONNOUSERSITE: '1' } : {}), PATH: [join(runtime, 'node_modules/.bin'), dirname(process.execPath), ...developerBins, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'),
-      DEEPSEEK_API_KEY: 'sandbox-host-broker', DEEPSEEK_BASE_URL: 'https://sandbox.invalid', DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL ?? 'deepseek-flash', SEEDA_SYSTEM_PROXY: '0', SEEDA_THINKING: process.env.SEEDA_THINKING ?? '1' };
+    const temporary = join(work, 'workspace/.seeda-tmp');
+    const env = { ...(process.platform === 'darwin' ? { SEEDA_SEMAPHORE_PREFIX: '/sd-' + randomUUID().replaceAll('-', '').slice(0, 16), PYTHONPATH: join(directory, 'python'), PYTHONNOUSERSITE: '1' } : {}), PATH: [join(runtime, 'node_modules/.bin'), dirname(process.execPath), ...developerBins, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: join(work, 'workspace'), TMPDIR: temporary, TMP: temporary, TEMP: temporary,
+      DEEPSEEK_API_KEY: 'sandbox-host-broker', DEEPSEEK_BASE_URL: 'https://sandbox.invalid', DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL ?? 'deepseek-flash', SEEDA_SYSTEM_PROXY: '0', SEEDA_THINKING: process.env.SEEDA_THINKING ?? '1', ...(this.command ? { SEEDA_HOST_EXECUTION: '1', SEEDA_EXECUTION_DESCRIPTION: 'isolated offline capability container; commands use /workspace; no host paths or official scoring' } : {}) };
     let launch: Launch;
     if (this.backend === 'process') {
       if (process.platform === 'darwin') {
@@ -158,7 +161,7 @@ export class SandboxCandidate {
       if (realpathSync(join(dependencyDir, 'node_modules')) !== join(dependencyDir, 'node_modules')) throw new Error('Sandbox dependencies must not redirect the host mount');
       launch = dockerLaunch(`seeda-eval-${this.id}`, [mount(runtime, '/candidate', true), mount(join(dependencyDir, 'node_modules'), '/candidate/node_modules', true), mount(work, '/evaluation'), mount(bridge, '/bridge.mjs', true)],
         ['node', '--experimental-strip-types', '/bridge.mjs', '/candidate/src/runtime/worker.ts', '/evaluation/workspace', '/evaluation/session.jsonl', '/evaluation/outputs', 'candidate'],
-        { ...env, HOME: '/evaluation/home', TMPDIR: '/tmp', PATH: '/usr/local/bin:/usr/bin:/bin' });
+        { ...env, HOME: '/evaluation/workspace', TMPDIR: '/evaluation/workspace/.seeda-tmp', TMP: '/evaluation/workspace/.seeda-tmp', TEMP: '/evaluation/workspace/.seeda-tmp', PATH: '/usr/local/bin:/usr/bin:/bin' });
     }
     if (this.stopped) throw new Error('Sandbox stopped');
     this.execution = new Execution({ ...launch, timeoutMs: this.budget?.timeoutMs ?? null, maxOutputBytes: this.budget === null ? null : 16 * 1024 * 1024 }, data => this.receive(data));
@@ -179,10 +182,27 @@ export class SandboxCandidate {
           if (message.error !== undefined && typeof message.error !== 'string' || message.answer !== undefined && typeof message.answer !== 'string') throw new Error('Invalid sandbox result');
           if (message.error) this.pending?.reject(new Error(message.error)); else this.pending?.resolve(message.answer ?? '');
           this.pending = undefined;
-        } else if (message.type === 'model') void this.model(message);
+        } else if (message.type === 'command' && this.command) this.commandDone = this.runCommand(message);
+        else if (message.type === 'command_cancel') this.commands.get(message.id)?.abort();
+        else if (message.type === 'model') void this.model(message);
         else if (!['process', 'heartbeat'].includes(message.type)) throw new Error('Unsupported sandbox message');
       }
     } catch { this.fail(new Error('Invalid or oversized sandbox output')); }
+  }
+  private commands = new Map<string, AbortController>();
+  private commandDone?: Promise<void>;
+  private async runCommand(message: { id: string; args: any }): Promise<void> {
+    if (this.stopped) return;
+    if (typeof message.id !== 'string' || this.commands.size || !message.args || typeof message.args.command !== 'string') { this.fail(new Error('Invalid candidate command')); return; }
+    const controller = new AbortController(); this.commands.set(message.id, controller);
+    if (this.controller.signal.aborted) controller.abort();
+    const abort = () => controller.abort(); this.controller.signal.addEventListener('abort', abort, { once: true });
+    try {
+      const result = await this.command!(message.args, { cwd: this.work, artifactDir: join(this.work, 'outputs'), signal: controller.signal });
+      this.execution?.send({ type: 'command_result', id: message.id, result });
+    } catch (error) {
+      this.execution?.send({ type: 'command_result', id: message.id, error: error instanceof Error ? error.message : 'Candidate command failed' });
+    } finally { this.commands.delete(message.id); this.controller.signal.removeEventListener('abort', abort); }
   }
   private async model(message: { id: unknown; body: unknown }): Promise<void> {
     if (this.modelBusy || (this.budget !== null && ++this.calls > this.budget.maxModelCalls) || !Number.isSafeInteger(message.id) || typeof message.body !== 'string' || Buffer.byteLength(message.body) > limit) {
@@ -218,6 +238,7 @@ export class SandboxCandidate {
   async stop(): Promise<void> {
     this.stopped = true; clearTimeout(this.startup); this.controller.abort();
     const error = new Error('Sandbox stopped'); this.readyReject(error); this.pending?.reject(error); this.pending = undefined;
+    await this.commandDone;
     await this.execution?.stop();
     await this.initialized;
     await this.execution?.stop();

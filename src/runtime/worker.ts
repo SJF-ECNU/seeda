@@ -38,7 +38,7 @@ const remoteCommand: CommandExecutor = (input, context) => {
     if (context.signal.aborted) abort();
   });
 };
-const usesHostExecution = role === 'primary' && process.env.SEEDA_HOST_EXECUTION === '1';
+const usesHostExecution = (role === 'primary' || role === 'candidate') && process.env.SEEDA_HOST_EXECUTION === '1';
 const bash = new BashTool(16_384, (pid, started) => send({ type: 'process', pid, started }), usesHostExecution ? remoteCommand : undefined);
 if (usesHostExecution) bash.definition.function.description += ` Host-selected execution environment: ${process.env.SEEDA_EXECUTION_DESCRIPTION}. Full-output artifact paths refer to host storage.`;
 let yieldRequested = false, yielded = false;

@@ -1,0 +1,32 @@
+export interface StageSpec {
+  hostPath?: string;
+  semaphorePrefix?: string;
+  dependenciesPath?: string;
+  runtimeRoot: string;
+  workspace: string;
+  phase: 'solve' | 'learn' | 'decision' | 'work';
+  sourcePath?: string;
+  sourceVersion?: { id: string; git_commit: string; runtime_path: string };
+  versionId?: string;
+  baseUrl: string;
+  dockerHost?: string;
+  scoreUrl?: string;
+  commandProofPath?: string;
+  nativeEvaluateUrl?: string;
+  nativeValidationHost?: string;
+  nativeEvidenceRoot?: string;
+  yieldRequestPath?: string;
+  yieldAfterTools?: string[];
+  formatCorrection?: boolean;
+  model: string;
+  thinking?: boolean;
+  execution: { kind: 'local' } | { kind: 'docker'; container: string; cwd: string };
+  prompt: string;
+  resultPath: string;
+  eventsPath: string;
+  timeoutMs: number | null;
+  sessionId?: string;
+  resumeSession?: boolean;
+  allowedEvaluationId?: string;
+  comparisonEvidencePaths?: string[];
+}

@@ -46,3 +46,11 @@ Agent management 同样使用 `{operation: "evaluate", version: "...", task: "..
 
 ## 基础版本后续更新
 当前工作树已补齐结构化执行反馈、evaluate有界摘要、显式acceptReason合并接替和宿主执行接入。旧操作及隔离/回退仍保留，已有种系不会自动升级。细节与实测边界见 [[docs/基础版本最小改造与验证]]。
+
+## 可信调用方可选的候选命令能力
+
+`RecoveryPolicy.candidateCommand` 可以由可信调用方提供一个 `CommandExecutor`。候选代码仍运行在原沙箱；只有 Bash 命令经既有 IPC 转给该执行器，默认没有绑定时仍拒绝候选 command IPC，不新增 management 权限、网络或文件访问。使用绑定需要支持 `SEEDA_HOST_EXECUTION` 的 worker；旧版本不自动获得远程命令执行。
+
+执行目标与隔离边界由调用方固定，不能让候选自行选择宿主环境或其他容器。调用方负责提供独立任务工具链、权限限制、命令真实退出/产物证据与环境故障识别；不能把正在运行的项目或隐藏验收器直接交给候选。候选取消会中止绑定命令，`stop()` 等待执行器的取消清理完成。该接口不表示原生 process 沙箱自动具备 Playwright、浏览器或任务容器依赖。
+
+WorkBuddy 四领域研究适配器独立保存在 `experiments/workbuddy/`，其裁判、同镜像命令容器和故障计量不属于核心默认功能，使用边界见该目录 README。

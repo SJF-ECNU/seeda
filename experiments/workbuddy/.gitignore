@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+upstream/
+p/
+runs/
+preparation/
+active-*.log

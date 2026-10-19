@@ -26,7 +26,7 @@ process.send({type:'ready'});
 process.on('message',async m=>{
  if(m.type!=='run')return;
  const input=JSON.parse(m.input), cwd=process.argv[2];
- const results={};
+ const results={home:process.env.HOME,tmp:process.env.TMPDIR,temp:process.env.TEMP,tmpAlias:process.env.TMP,cwd};
  for(const op of ['read','write','symlink','signal','markerRead','markerRemove']){
   try{if(op==='markerRead')readFileSync(cwd+'/../.host-only');if(op==='markerRemove')unlinkSync(cwd+'/../.host-only');if(op==='read')readFileSync(input.secret);if(op==='write')writeFileSync(input.secret,'bad');if(op==='symlink'){symlinkSync(input.secret,cwd+'/link');readFileSync(cwd+'/link');}if(op==='signal')process.kill(input.pid,0);results[op]='ALLOWED';}catch{results[op]='blocked';}
  }
@@ -55,6 +55,7 @@ for (const backend of ['process', 'container'] as const) {
   const candidate=new SandboxCandidate(backend,f.runtime,f.work,()=>{});
   t.after(async()=>{await candidate.stop().catch(()=>{});server.closeAllConnections();server.close();socketServer.close();await rm(f.root,{recursive:true,force:true});for(const [key,value]of Object.entries(prior)){const name=key==='key'?'DEEPSEEK_API_KEY':'DEEPSEEK_BASE_URL';if(value===undefined)delete process.env[name];else process.env[name]=value;}});
   const answer=JSON.parse(await candidate.run(JSON.stringify({secret,pid:process.pid,port:address.port,socketPath})));
+  assert.equal(answer.home,answer.cwd);assert.equal(answer.tmp,answer.cwd+'/.seeda-tmp');assert.equal(answer.temp,answer.tmp);assert.equal(answer.tmpAlias,answer.tmp);
   assert.equal(answer.read,'blocked');assert.equal(answer.write,'blocked');assert.equal(answer.symlink,'blocked');assert.equal(answer.signal,'blocked');assert.equal(answer.network,'blocked');assert.equal(answer.socket,'blocked');
   assert.equal(answer.markerRead,'blocked');assert.equal(answer.markerRemove,'blocked');assert.equal(answer.key,'sandbox-host-broker');assert.equal(answer.model,'model-ok');assert.equal(calls,1);
   assert.equal(answer.fork,0);assert.deepEqual(answer.child,{read:'blocked',write:'blocked',signal:'blocked'});
@@ -224,7 +225,16 @@ lock=m.get_context('spawn').Lock()
 assert lock.acquire(False)
 lock.release()
 from pathlib import Path
-import os
+import os,tempfile
+root=Path(os.environ['HOME']).resolve()
+assert root.name == 'workspace'
+assert all(Path(os.environ[k]).resolve() == root/'.seeda-tmp' for k in ('TMPDIR','TMP','TEMP'))
+with tempfile.TemporaryDirectory() as td:
+ current=Path(td).resolve()
+ assert root in current.parents
+ while current != root:
+  list(current.iterdir())
+  current=current.parent
 p=Path(os.environ['TMPDIR'])/'pool_probe.py'
 p.write_text(chr(10).join(["import multiprocessing as m", "def square(x):return x*x", "if __name__ == '__main__':", " for method in ('spawn','fork'):", "  with m.get_context(method).Pool(2) as pool: assert pool.map(square,[2,3])==[4,9]"]))
 import subprocess,sys
