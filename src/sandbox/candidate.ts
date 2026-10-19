@@ -54,13 +54,15 @@ class Execution {
   }
 }
 
-export function macProfile(runtime: string, writable: string): string {
+export function macProfile(runtime: string, writable: string, semaphorePrefix?: string): string {
+  if (semaphorePrefix && !/^\/sd-[0-9a-f]{16}$/.test(semaphorePrefix)) throw new Error("Invalid semaphore namespace");
   const npm = join(dirname(process.execPath), 'npm');
   const tools = ['/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'];
   if (existsSync(npm)) tools.push(dirname(dirname(realpathSync(npm))));
-  const paths = [...tools.filter(path => existsSync(path)), '/System/Library', '/usr/lib', '/usr/share', '/usr/bin', '/bin', '/sbin', '/dev/null', '/dev/urandom', '/dev/random', process.execPath, runtime, bridge];
+  const paths = [join(directory, "python"), ...tools.filter(path => existsSync(path)), '/System/Library', '/usr/lib', '/usr/share', '/usr/bin', '/bin', '/sbin', '/dev/null', '/dev/urandom', '/dev/random', process.execPath, runtime, bridge];
   return `(version 1)(deny default)
     (allow process-exec)(allow process-fork)(allow signal (target same-sandbox))(allow sysctl-read)(allow file-read-metadata)
+    ${semaphorePrefix ? `(allow ipc-posix-sem (ipc-posix-name-regex #"^${semaphorePrefix}-"))` : ""}
     (allow file-read* (literal "/"))
     (allow mach-lookup (global-name "com.apple.system.logger"))
     (allow file-read* ${paths.map(path => `(subpath ${JSON.stringify(realpathSync(path))})`).join(' ')})
@@ -72,7 +74,7 @@ export function macProfile(runtime: string, writable: string): string {
 }
 function processLaunch(runtime: string, work: string, env: NodeJS.ProcessEnv): Launch {
   const args = ['--experimental-strip-types', bridge, join(runtime, 'src/runtime/worker.ts'), join(work, 'workspace'), join(work, 'session.jsonl'), join(work, 'outputs'), 'candidate'];
-  if (process.platform === 'darwin') return { command: '/usr/bin/sandbox-exec', args: ['-p', macProfile(runtime, work), process.execPath, ...args], cwd: runtime, env, macCleanup: [work, join(work, '.host-only')], timeoutMs: 120000 };
+  if (process.platform === 'darwin') return { command: '/usr/bin/sandbox-exec', args: ['-p', macProfile(runtime, work, env.SEEDA_SEMAPHORE_PREFIX), process.execPath, ...args], cwd: runtime, env, macCleanup: [work, join(work, '.host-only')], timeoutMs: 120000 };
   if (process.platform !== 'linux') throw new Error('Process sandbox requires macOS Seatbelt or Linux bubblewrap; select container on this host');
   const binds: string[] = [];
   for (const path of ['/usr/bin', '/usr/lib', '/usr/share', '/bin', '/sbin', '/lib', '/lib64']) binds.push('--ro-bind-try', path, path);
@@ -133,7 +135,7 @@ export class SandboxCandidate {
     if (this.stopped) throw new Error('Sandbox cancelled before startup');
     const runtime = realpathSync(this.runtime); const work = realpathSync(this.work);
     const developerBins = process.platform === 'darwin' ? ['/Library/Developer/CommandLineTools/usr/bin', '/Applications/Xcode.app/Contents/Developer/usr/bin'].filter(path => existsSync(path)) : [];
-    const env = { PATH: [join(runtime, 'node_modules/.bin'), dirname(process.execPath), ...developerBins, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'),
+    const env = { ...(process.platform === 'darwin' ? { SEEDA_SEMAPHORE_PREFIX: '/sd-' + randomUUID().replaceAll('-', '').slice(0, 16), PYTHONPATH: join(directory, 'python'), PYTHONNOUSERSITE: '1' } : {}), PATH: [join(runtime, 'node_modules/.bin'), dirname(process.execPath), ...developerBins, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'),
       DEEPSEEK_API_KEY: 'sandbox-host-broker', DEEPSEEK_BASE_URL: 'https://sandbox.invalid', DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL ?? 'deepseek-flash', SEEDA_SYSTEM_PROXY: '0', SEEDA_THINKING: process.env.SEEDA_THINKING ?? '1' };
     let launch: Launch;
     if (this.backend === 'process') {

@@ -39,7 +39,7 @@ export class WorkerProcess {
   readonly ready: Promise<void>;
   constructor(store: VersionStore, version: Version, cwd: string, session: string, artifacts: string, role: string,
     event: (event: AgentEvent) => void, management: (args: Record<string, unknown>) => Promise<unknown>, failed: (worker: WorkerProcess, error: Error) => void,
-    env: NodeJS.ProcessEnv = process.env, execution: ExecutionEnvironment = { kind: 'local' }) {
+    env: NodeJS.ProcessEnv = process.env, execution: ExecutionEnvironment = { kind: 'local' }, execute: typeof executeManagedCommand = executeManagedCommand) {
     this.version = version;
     const logs = join(store.root ?? artifacts, 'worker-logs');
     mkdirSync(logs, { recursive: true, mode: 0o700 });
@@ -91,7 +91,7 @@ export class WorkerProcess {
           this.send({ type: 'command_result', id: message.id, error: 'Host command execution unavailable' }); return;
         }
         const controller = new AbortController(); this.command = { id: message.id, controller };
-        this.commandDone = executeManagedCommand(execution, message.args, { cwd, artifactDir: artifacts, signal: controller.signal })
+        this.commandDone = execute(execution, message.args, { cwd, artifactDir: artifacts, signal: controller.signal })
           .then(result => this.send({ type: 'command_result', id: message.id, result }),
             () => this.send({ type: 'command_result', id: message.id, error: 'Host command execution failed or parameters were invalid' }))
           .finally(() => { this.command = undefined; });

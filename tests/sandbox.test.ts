@@ -211,3 +211,31 @@ test('unbudgeted sandbox accepts cumulative output above 16 MiB but rejects over
   }finally{await candidate.stop().catch(()=>{});await rm(f.root,{recursive:true,force:true});}
  }
 });
+
+test('process sandbox supports Python multiprocessing without granting other semaphore namespaces', { skip: process.platform !== 'darwin', timeout: 15000 }, async t => {
+  const f = await fixture();
+  await writeFile(join(f.runtime, 'src/runtime/worker.ts'), `
+import {spawnSync} from 'node:child_process';
+process.send({type:'ready'});
+process.on('message',m=>{if(m.type!=='run')return;
+const p=spawnSync('/Applications/Xcode.app/Contents/Developer/usr/bin/python3',['-c',\`import multiprocessing as m
+import _multiprocessing
+lock=m.get_context('spawn').Lock()
+assert lock.acquire(False)
+lock.release()
+from pathlib import Path
+import os
+p=Path(os.environ['TMPDIR'])/'pool_probe.py'
+p.write_text(chr(10).join(["import multiprocessing as m", "def square(x):return x*x", "if __name__ == '__main__':", " for method in ('spawn','fork'):", "  with m.get_context(method).Pool(2) as pool: assert pool.map(square,[2,3])==[4,9]"]))
+import subprocess,sys
+subprocess.run([sys.executable,str(p)],check=True)
+try: _multiprocessing.SemLock(0,1,1,'/foreign-seeda-test',True)
+except PermissionError: pass
+else: raise AssertionError('foreign namespace allowed')
+print('multiprocessing-ready')\`],{encoding:'utf8'});
+process.send({type:'result',answer:JSON.stringify({code:p.status,out:p.stdout,err:p.stderr})});});`);
+  const candidate = new SandboxCandidate('process', f.runtime, f.work, () => {});
+  t.after(async () => { await candidate.stop(); await rm(f.root, {recursive:true,force:true}); });
+  const result=JSON.parse(await candidate.run('probe'));
+  assert.equal(result.code,0,result.err);assert.match(result.out,/multiprocessing-ready/);
+});

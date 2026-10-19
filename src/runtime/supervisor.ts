@@ -7,7 +7,7 @@ import { libraryRoot } from './paths.ts';
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent } from '../core/types.ts';
 import { VersionStore, type Version, type SeedOrigin } from '../versions/store.ts';
-import type { ExecutionEnvironment } from './execution.ts';
+import type { ExecutionEnvironment, executeManagedCommand } from './execution.ts';
 import { WorkerProcess } from './process.ts';
 import { SandboxCandidate, sandboxBackend, defaultCandidateBudget, type CandidateBudget } from '../sandbox/candidate.ts';
 import { sessionPath, sessionHistory, listSessions } from './sessions.ts';
@@ -18,6 +18,7 @@ export interface RecoveryPolicy {
   allowFallback?: boolean;
   // The owner retains its existing deadline and accounting; rejection stops recovery.
   beforeResume?: () => Promise<void> | void;
+  executeCommand?: typeof executeManagedCommand;
 }
 
 type ControlRequest = { id: string; operation: string; input?: string; args?: Record<string, unknown> };
@@ -47,7 +48,7 @@ export class Supervisor {
     const worker = new WorkerProcess(this.store, version, this.cwd, session, join(this.store.root, 'outputs'), 'primary',
       event => { if (this.primary === worker) this.activeRequest?.(event); },
       args => { if (this.primary !== worker) throw new Error('Only the current primary can manage evolution'); return this.manage(args, version.id); },
-      (failed, error) => { if (this.primary === failed && !this.activeRequest) void this.recoverFailure(error).catch(() => {}); }, process.env, this.execution);
+      (failed, error) => { if (this.primary === failed && !this.activeRequest) void this.recoverFailure(error).catch(() => {}); }, process.env, this.execution, this.recoveryPolicy.executeCommand);
     this.primary = worker;
     await worker.ready;
   }

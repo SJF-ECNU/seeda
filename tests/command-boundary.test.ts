@@ -55,6 +55,30 @@ process.send?.({type:'ready',messages:[],compact:true});
     }
     await assert.rejects(readFile(sentinel), { code: 'ENOENT' });
   });
+  await t.test('default and injected host executors preserve pipeline failure before returning to worker', async () => {
+    await writeFile(join(runtime, 'src/runtime/worker.ts'), `
+process.send?.({type:'ready',messages:[],commandExecution:true});
+process.on('message', message => {
+  if(message.type==='stop')process.exit(0);
+  if(message.type==='run')process.send?.({type:'command',id:'pipeline',args:{command:'false | cat'}});
+  if(message.type==='command_result')process.send?.({type:'result',answer:JSON.stringify(message.result)});
+});
+`);
+    let intercepted = 0;
+    const { executeManagedCommand } = await import('../src/runtime/execution.ts');
+    for (const custom of [false, true]) {
+      const execute = custom ? async (...args: Parameters<typeof executeManagedCommand>) => {
+        intercepted++; return { ...await executeManagedCommand(...args) as object, inspected: true };
+      } : undefined;
+      const worker = new WorkerProcess(store, version, cwd, join(root, 'session.jsonl'), join(root, 'outputs'), 'primary', () => {}, async () => null, () => {}, process.env, { kind: 'local' }, execute);
+      workers.push(worker); await worker.ready;
+      const result = JSON.parse(await worker.run('pipeline'));
+      assert.equal(result.exit_code, 1);
+      assert.equal(result.inspected, custom ? true : undefined);
+      await worker.stop();
+    }
+    assert.equal(intercepted, 1);
+  });
   await t.test('isolated candidate has no host execution binding and cannot send a host command', async () => {
     const secret = join(root, 'host-only-secret'); const sentinel = join(cwd, 'candidate-must-not-create');
     await writeFile(secret, 'host-only-test-value');

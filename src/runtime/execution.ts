@@ -44,7 +44,7 @@ export function commandExecutor(environment: ExecutionEnvironment, onProcess?: (
     return runCommand(input, context, {
       program: 'docker', cwd: context.cwd,
       args: ['exec', '-w', cwd, '-e', `SEEDA_COMMAND_ID=${marker}`, container,
-        'timeout', '--signal=KILL', `${input.timeout ?? 30}s`, 'bash', '--noprofile', '--norc', '-c', input.command],
+        'timeout', '--signal=KILL', `${input.timeout ?? 30}s`, 'bash', '--noprofile', '--norc', '-o', 'pipefail', '-c', input.command],
       environment: { kind: 'docker', container, cwd }, artifactLocation: 'host',
       cleanup: async () => { await exec('docker', ['exec', container, 'bash', '--noprofile', '--norc', '-c', cleanup, 'seeda-cleanup', marker], { timeout: 10_000, maxBuffer: 16_384 }); },
     }, 16_384, onProcess);

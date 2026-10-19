@@ -20,7 +20,7 @@ export interface CommandInvocation {
 export function localCommand(maxOutputBytes: number, onProcess?: (pid: number, started: boolean) => void): CommandExecutor {
   return (input, context) => {
     const cwd = resolve(context.cwd, input.cwd ?? '.');
-    return runCommand(input, context, { program: 'bash', args: ['--noprofile', '--norc', '-c', input.command], cwd, environment: { kind: 'local', cwd } }, maxOutputBytes, onProcess);
+    return runCommand(input, context, { program: 'bash', args: ['--noprofile', '--norc', '-o', 'pipefail', '-c', input.command], cwd, environment: { kind: 'local', cwd } }, maxOutputBytes, onProcess);
   };
 }
 
