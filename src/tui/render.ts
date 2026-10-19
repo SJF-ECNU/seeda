@@ -15,7 +15,8 @@ export interface Layout { lines: string[]; cursorRow: number; cursorColumn: numb
 interface EntryCache { sig: string; lines: string[]; }
 const entryCaches = new WeakMap<TuiState, WeakMap<object, EntryCache>>();
 export function layout(state: TuiState, columns: number, rows: number, title: string, color = process.env.NO_COLOR === undefined): Layout {
-  const width = Math.max(1, columns - 1);
+  // Reserve the last column for the scrollbar so wrapped text never collides with it.
+  const width = Math.max(1, columns - 2);
   const bodyHeight = Math.max(1, rows - 5);
   const contentWidth = Math.max(1, width - 4);
   const fit = (text: string, limit = width) => wrap(text, limit)[0] ?? '';
@@ -71,12 +72,34 @@ export function layout(state: TuiState, columns: number, rows: number, title: st
     return lines;
   };
   const history = state.entries.flatMap(renderEntry);
+  // While the reader is scrolled up, keep the same top line visible as new
+  // content arrives instead of letting the stream drag the viewport down.
+  if (state.scroll > 0 && state.renderedHistoryLines !== undefined && state.renderedWidth === contentWidth) {
+    state.scroll += Math.max(0, history.length - state.renderedHistoryLines);
+  }
+  state.renderedHistoryLines = history.length;
+  state.renderedWidth = contentWidth;
   if (!history.length) history.push('', ...wrap('你好，我是 seeda。', contentWidth).map(line => tint(`  ${line}`, '1;36', color)), '', ...wrap('描述一个任务，我们从这里开始。', contentWidth).map(line => `  ${line}`), '', tint(fit('  /new 新会话 · /sessions 列表 · /resume ID 恢复 · /compact 压缩'), '90', color));
   const scroll = Math.max(0, Math.min(state.scroll, Math.max(0, history.length - height)));
   state.scroll = scroll;
   const end = history.length - scroll;
   const visible = history.slice(Math.max(0, end - height), end);
   while (visible.length < height) visible.push('');
+  // A fixed-position thumb makes hidden history visible at a glance; the footer
+  // carries the exact line range for terminals where the bar is hard to read.
+  const overflow = Math.max(0, history.length - height);
+  const scrollbar = (() => {
+    if (!overflow) return [] as string[];
+    const thumbHeight = Math.max(1, Math.min(height, Math.round((height * height) / history.length)));
+    const thumbTop = Math.round((height - thumbHeight) * (overflow - scroll) / overflow);
+    return Array.from({ length: height }, (_, index) => index >= thumbTop && index < thumbTop + thumbHeight ? '█' : '│');
+  })();
+  const body = scrollbar.length
+    ? visible.map((line, index) => {
+        const bar = scrollbar[index] ?? '│';
+        return `${line}${' '.repeat(Math.max(0, width - stringWidth(line)))}${tint(bar, bar === '█' ? '36' : '90', color)}`;
+      })
+    : visible;
   // A pasted draft may contain real newlines; show them as a visible marker while
   // keeping the single-line input layout and the submitted text intact.
   const draft = state.draft.map(character => character === '\n' ? '\u23ce' : safeText(character).replace(/[\r\n]/g, ' '));
@@ -104,7 +127,7 @@ export function layout(state: TuiState, columns: number, rows: number, title: st
     const rate = cacheHitRate(metrics);
     if (rate !== undefined) segments.push({ text: `缓存命中 ${Math.round(rate * 100)}%`, tone: '90' });
   }
-  const plainTail = ` ${state.busy ? spinner : '●'} ${state.busy && state.status === 'Ready' ? '正在收尾' : statusNames[state.status] ?? state.status}${segments.length ? ` · ${segments.map(segment => segment.text).join(' · ')}` : ''}${scroll ? ' · 浏览历史' : ''}${state.showToolDetails ? ' · 工具详情' : ''}`;
+  const plainTail = ` ${state.busy ? spinner : '●'} ${state.busy && state.status === 'Ready' ? '正在收尾' : statusNames[state.status] ?? state.status}${segments.length ? ` · ${segments.map(segment => segment.text).join(' · ')}` : ''}${scroll ? ` · 历史 ${Math.round(((overflow - scroll) / overflow) * 100)}%` : ''}${state.showToolDetails ? ' · 工具详情' : ''}`;
   const fittedTail = fit(plainTail);
   // Tint each surviving plain segment in place, restoring the status tone after
   // each reset so the surrounding text keeps its colour on the same line.
@@ -112,10 +135,10 @@ export function layout(state: TuiState, columns: number, rows: number, title: st
     ? segments.reduce((line, segment) => line.replace(segment.text, `\x1b[${segment.tone}m${segment.text}\x1b[0m\x1b[${statusTone}m`), fittedTail)
     : fittedTail;
   const lines = [tint('seeda', '1;36', color) + tint(fit(`  /  ${title}${state.sessionId ? `  · 会话 ${state.sessionId === 'main' ? 'main' : state.sessionId.slice(0, 8)}` : ''}`, Math.max(1, width - 5)), '90', color),
-    tint('─'.repeat(width), '90', color), ...visible, ...preview,
+    tint('─'.repeat(width), '90', color), ...body, ...preview,
     tint(tintedTail, statusTone, color),
     tint(' › ', '1;36', color) + (shown || tint(fit('输入消息…', inputWidth), '90', color)),
-    tint(fit(matches.length ? ` ↑↓ 选择 ${selected + 1}/${matches.length} · Tab 补全 · Enter 确认 · Esc 收起` : ' Enter 发送 · Ctrl+C 取消/退出 · Ctrl+O 工具详情 · PgUp/PgDn 历史'), '90', color)];
+    tint(fit(matches.length ? ` ↑↓ 选择 ${selected + 1}/${matches.length} · Tab 补全 · Enter 确认 · Esc 收起` : ' Enter 发送 · Ctrl+C 取消/退出 · Ctrl+O 详情 · 滚轮/PgUp/PgDn 历史'), '90', color)];
   return { lines, cursorRow: Math.max(1, rows - 1), cursorColumn: Math.min(columns, size + 4) };
 }
 export function paint(next: Layout, previous?: Layout): string {

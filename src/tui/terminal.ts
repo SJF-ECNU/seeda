@@ -9,6 +9,19 @@ import { layout, paint, graphemes, safeText, type Layout } from './render.ts';
 // indistinguishable from Enter presses, so a multi-line paste would be submitted
 // line by line instead of landing in the draft. `paste` carries that flag.
 const LINE_BREAK_KEYS = new Set(['return', 'enter', 'linefeed']);
+const SCROLL_LINES = 3;
+// Keep scroll-key handling pure so the TUI tests can cover wheel-style arrows
+// without driving a real terminal. Returns true when the key was consumed.
+export function scrollKey(state: TuiState, key: Key, rows: number): boolean {
+  const page = Math.max(1, rows - 5);
+  if (key.name === 'pageup') { state.scrollBy(page); return true; }
+  if (key.name === 'pagedown') { state.scrollBy(-page); return true; }
+  if (key.name === 'up') { state.scrollBy(SCROLL_LINES); return true; }
+  if (key.name === 'down') { state.scrollBy(-SCROLL_LINES); return true; }
+  if (key.ctrl && key.name === 'home') { state.scrollToTop(); return true; }
+  if (key.ctrl && key.name === 'end') { state.scrollToBottom(); return true; }
+  return false;
+}
 const isLineBreak = (key: Key): boolean => LINE_BREAK_KEYS.has(key.name ?? '') || key.sequence === '\r' || key.sequence === '\n';
 export function editInput(state: TuiState, text: string, key: Key, paste = false): void {
   state.commandDismissed = undefined;
@@ -75,7 +88,7 @@ export function runTerminal(state: TuiState, options: TerminalOptions = {}): { d
     process.removeListener('exit', close);
     input.setRawMode(wasRaw ?? false);
     input.pause();
-    output.write('\x1b[?25h\x1b[?2004l\x1b[?1049l');
+    output.write('\x1b[?25h\x1b[?2004l\x1b[?1007l\x1b[?1049l');
     complete();
   };
   const onInterrupt = () => { if (state.busy) state.cancel(); else close(); };
@@ -97,8 +110,10 @@ export function runTerminal(state: TuiState, options: TerminalOptions = {}): { d
         refresh(); return;
       }
       if (key.ctrl && key.name === 'o') { state.showToolDetails = !state.showToolDetails; refresh(); return; }
-      if (key.name === 'pageup') { state.scroll += Math.max(1, (output.rows || 24) - 5); refresh(); return; }
-      if (key.name === 'pagedown') { state.scroll = Math.max(0, state.scroll - Math.max(1, (output.rows || 24) - 5)); refresh(); return; }
+      // Up/Down also cover mouse wheels in terminals that translate alternate-screen
+      // wheel events into arrow keys (DECSET 1007), so no mouse capture is needed and
+      // text selection keeps working.
+      if (scrollKey(state, key, output.rows || 24)) { refresh(); return; }
     }
     editInput(state, text, key, pasting);
     refresh();
@@ -110,6 +125,6 @@ export function runTerminal(state: TuiState, options: TerminalOptions = {}): { d
   process.on('SIGTERM', onEnd); process.on('SIGINT', onInterrupt); process.on('exit', close);
   // Enable bracketed paste so the terminal marks pasted text and its embedded
   // newlines can be told apart from Enter.
-  output.write('\x1b[?2004h\x1b[?1049h'); refresh();
+  output.write('\x1b[?2004h\x1b[?1049h\x1b[?1007h'); refresh();
   return { done, refresh };
 }

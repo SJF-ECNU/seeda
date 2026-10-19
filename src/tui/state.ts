@@ -44,6 +44,12 @@ export class TuiState {
   cursor = 0;
   scroll = 0;
   showToolDetails = false;
+  // Rendering state used to keep a scrolled viewport anchored while a reply streams.
+  renderedHistoryLines?: number;
+  renderedWidth?: number;
+  scrollBy(lines: number): void { this.scroll = Math.max(0, this.scroll + lines); }
+  scrollToTop(): void { this.scroll = Number.MAX_SAFE_INTEGER; }
+  scrollToBottom(): void { this.scroll = 0; }
   private reply?: Entry;
   private control?: AgentControl;
   private readonly changed: () => void;
@@ -53,6 +59,7 @@ export class TuiState {
   }
   loadHistory(history: Message[], id?: string): void {
     this.entries.length = 0; this.reply = undefined; this.scroll = 0; this.sessionId = id; this.metrics = undefined;
+    this.renderedHistoryLines = undefined; this.renderedWidth = undefined;
     for (const message of history) {
       if (message.role === 'user' || message.role === 'assistant') {
         if (message.content) this.entries.push({ kind: message.role, text: message.content });

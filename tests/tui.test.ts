@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { TuiState } from '../src/tui/state.ts';
 import { layout, paint, graphemes, safeText, wrap } from '../src/tui/render.ts';
-import { editInput } from '../src/tui/terminal.ts';
+import { editInput, scrollKey } from '../src/tui/terminal.ts';
 import type { ToolCall } from '../src/core/types.ts';
 
 const call: ToolCall = { id: 'one', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd"}' } };
@@ -197,4 +197,56 @@ test('layout caches per-entry lines and re-renders only entries whose content ch
   const typed = layout(state, 60, 20, 'flash');
   assert.equal(typed.lines.length, edited.lines.length);
   assert.notDeepEqual(typed.lines, edited.lines);
+});
+
+test('long history scrolls by line and page with a visible scrollbar and position', () => {
+  const state = new TuiState([], () => {});
+  state.entries.push({ kind: 'assistant', text: Array.from({ length: 120 }, (_, i) => `line ${i + 1}`).join('\n') });
+  const bottom = layout(state, 60, 24, 'flash', false);
+  assert.ok(bottom.lines.some(line => line.includes('line 120')));
+  assert.ok(bottom.lines.some(line => line.includes('█')));
+  assert.ok(!bottom.lines.at(-3)!.includes('历史 '));
+  state.scrollBy(30);
+  const scrolled = layout(state, 60, 24, 'flash', false);
+  assert.ok(scrolled.lines.some(line => line.includes('line 90')));
+  assert.match(scrolled.lines.at(-3)!, /历史 \d+%/);
+  state.scrollToTop();
+  const top = layout(state, 60, 24, 'flash', false);
+  assert.ok(top.lines.some(line => line.includes('line 1')));
+  assert.ok(top.lines.every(line => stringWidth(line) <= 59));
+  state.scrollToBottom();
+  assert.equal(state.scroll, 0);
+});
+
+
+test('scroll keys cover wheel-style arrows, pages and boundaries', () => {
+  const state = new TuiState([], () => {});
+  assert.equal(scrollKey(state, { name: 'up' } as any, 24), true);
+  assert.equal(state.scroll, 3);
+  scrollKey(state, { name: 'down' } as any, 24);
+  assert.equal(state.scroll, 0);
+  scrollKey(state, { name: 'pageup' } as any, 24);
+  assert.equal(state.scroll, 19);
+  scrollKey(state, { name: 'pagedown' } as any, 24);
+  assert.equal(state.scroll, 0);
+  scrollKey(state, { name: 'up' } as any, 24);
+  scrollKey(state, { ctrl: true, name: 'end' } as any, 24);
+  assert.equal(state.scroll, 0);
+  scrollKey(state, { ctrl: true, name: 'home' } as any, 24);
+  assert.ok(state.scroll > 0);
+  assert.equal(scrollKey(state, { name: 'a' } as any, 24), false);
+});
+
+
+test('scrolling up anchors the view while new content streams in', () => {
+  const state = new TuiState([], () => {});
+  state.entries.push({ kind: 'assistant', text: Array.from({ length: 120 }, (_, i) => `line ${i + 1}`).join('\n') });
+  layout(state, 60, 24, 'flash', false);
+  state.scrollBy(30);
+  const before = layout(state, 60, 24, 'flash', false);
+  assert.ok(before.lines.some(line => line.includes('line 73')));
+  state.entries[0].text += '\nline 121\nline 122';
+  const after = layout(state, 60, 24, 'flash', false);
+  assert.ok(after.lines.some(line => line.includes('line 73')));
+  assert.equal(state.scroll, 32);
 });
